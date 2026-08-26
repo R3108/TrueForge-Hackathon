@@ -1,0 +1,87 @@
+import { test, describe, before, after } from 'node:test';
+import assert from 'node:assert/strict';
+import { stdin } from 'node:process';
+
+import { requestClearance, type PendingCall } from '../approvals.ts';
+
+/**
+ * The safety claim of this project is that the agent cannot write to a
+ * repository while nobody is watching. These tests hold that claim to account.
+ */
+
+const call = (overrides: Partial<PendingCall> = {}): PendingCall => ({
+  threadId: 'main',
+  toolCallId: 'call_1',
+  toolName: 'create_pull_request',
+  args: { title: 'Fix null deref in cart.ts' },
+  ...overrides,
+});
+
+describe('requestClearance', () => {
+  let originalIsTTY: boolean | undefined;
+
+  before(() => {
+    originalIsTTY = stdin.isTTY;
+  });
+
+  after(() => {
+    // `isTTY` is absent (not false) on a real non-TTY stream, so restore shape.
+    if (originalIsTTY === undefined) delete (stdin as { isTTY?: boolean }).isTTY;
+    else stdin.isTTY = originalIsTTY;
+  });
+
+  test('returns no decisions when nothing is pending', async () => {
+    const decisions = await requestClearance([]);
+    assert.deepEqual(decisions, []);
+  });
+
+  test('denies every pending write when there is no interactive terminal', async () => {
+    stdin.isTTY = false;
+
+    const decisions = await requestClearance([
+      call({ toolCallId: 'call_a', toolName: 'create_branch' }),
+      call({ toolCallId: 'call_b', toolName: 'create_pull_request' }),
+    ]);
+
+    assert.equal(decisions.length, 2, 'every pending call must be answered');
+    for (const decision of decisions) {
+      assert.equal(decision.type, 'user.tool_approval');
+      assert.equal(
+        decision.approval.status,
+        'deny',
+        'an unattended session must never auto-approve a repository write',
+      );
+    }
+  });
+
+  test('gives the agent a reason when it denies, so it can explain itself', async () => {
+    stdin.isTTY = false;
+
+    const [decision] = await requestClearance([call()]);
+    assert.ok(decision, 'expected a decision');
+    assert.equal(decision.approval.status, 'deny');
+    assert.match(
+      (decision.approval as { reason: string }).reason,
+      /non-interactive/i,
+      'the denial reason should tell the agent why it was refused',
+    );
+  });
+
+  test('answers each pending call with its own id, not a shared one', async () => {
+    stdin.isTTY = false;
+
+    const decisions = await requestClearance([
+      call({ toolCallId: 'call_a', threadId: 'main' }),
+      call({ toolCallId: 'call_b', threadId: 'sub_7f2a' }),
+    ]);
+
+    assert.deepEqual(
+      decisions.map((d) => [d.tool_call_id, d.thread_id]),
+      [
+        ['call_a', 'main'],
+        ['call_b', 'sub_7f2a'],
+      ],
+      'a decision routed to the wrong call would approve something unreviewed',
+    );
+  });
+});
