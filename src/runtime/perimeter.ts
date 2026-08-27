@@ -89,11 +89,18 @@ export function globToRegExp(glob: string): RegExp {
 
     if (char === '*') {
       if (glob[i + 1] === '*') {
-        source += '.*';
         i++;
-        // `fixture/**/x` and `fixture/**` should both work, so swallow a
-        // separator that immediately follows the wildcard.
-        if (glob[i + 1] === '/') i++;
+        if (glob[i + 1] === '/') {
+          // `a/**/b` spans whole path segments, so it matches `a/b` and
+          // `a/x/y/b` but never `a/xb`. Emitting `.*` here instead would let a
+          // suffix match part of a filename and silently widen the allowlist
+          // past what the operator wrote.
+          source += '(?:[^/]+/)*';
+          i++;
+        } else {
+          // Trailing `**`: everything below this point, separators included.
+          source += '.*';
+        }
       } else {
         source += '[^/]*';
       }

@@ -12,6 +12,8 @@ import { scanForSecrets, scanPayloads, parseSecretPolicy } from '../secrets.ts';
 const githubToken = `gh${'p'}_${'a1B2c3D4e5F6g7H8i9J0'}${'kLmNoPqRsTuVwXyZ0123'}`;
 const awsKey = `AK${'IA'}${'ABCDEFGHIJKLMNOP'}`;
 const jwt = `ey${'JhbGciOiJIUzI1NiJ9'}.${'eyJzdWIiOiIxMjM0NTY3ODkw'}.${'dQw4w9WgXcQaBcDeFg'}`;
+/** High-entropy by construction, so the assignment rule has something to catch. */
+const highEntropy = ['8f3aB91x', 'Q0zLp7vN', '2sYc'].join('');
 
 describe('scanForSecrets', () => {
   test('recognises a GitHub token by its issuer prefix', () => {
@@ -41,7 +43,7 @@ describe('scanForSecrets', () => {
   });
 
   test('flags a hardcoded credential assignment', () => {
-    const [finding] = scanForSecrets('const client_secret = "8f3aB91xQ0zLp7vN2sYc";');
+    const [finding] = scanForSecrets(`const client_secret = "${highEntropy}";`);
 
     assert.equal(finding?.label, 'hardcoded credential assignment');
   });

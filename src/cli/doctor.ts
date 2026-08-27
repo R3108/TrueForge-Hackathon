@@ -139,8 +139,20 @@ async function checkGateDrift(client: TrueForge, config: Config): Promise<string
   const sentry = servers.find((server) => server.name === config.connectors.sentry);
   const sentryReadOnly = (sentry?.enableTools ?? []).includes('@read-only');
 
+  if (!sentry) {
+    throw new Error(
+      `the saved agent has no "${config.connectors.sentry}" connector attached - run: npm run provision`,
+    );
+  }
+
+  // Not an advisory. The repository states that incidents are read and never
+  // mutated; if the live agent can write to Sentry, that statement is false and
+  // "All clear" would be the wrong thing to print.
   if (!sentryReadOnly) {
-    throw new Advisory(`the "${config.connectors.sentry}" connector is not restricted to @read-only`);
+    throw new Error(
+      `the saved agent's "${config.connectors.sentry}" connector is not restricted to @read-only ` +
+        `(currently: ${(sentry.enableTools ?? ['@all']).join(', ')}) - run: npm run provision to restore it`,
+    );
   }
 
   if (gate.includes('@all')) return 'every tool gated (@all)';

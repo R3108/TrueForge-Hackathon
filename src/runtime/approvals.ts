@@ -23,6 +23,12 @@ export interface PendingCall {
   toolCallId: string;
   toolName: string;
   args: unknown;
+  /**
+   * False when the paused call could not be matched back to its arguments. The
+   * perimeter and the tripwire both reason about arguments, so an unresolved
+   * call is one no check can speak for - it is refused rather than shown.
+   */
+  resolved?: boolean;
 }
 
 export interface ClearanceOptions {
@@ -93,6 +99,16 @@ export async function requestClearance(
   };
 
   for (const call of pending) {
+    if (call.resolved === false) {
+      settle(
+        call,
+        'blocked-unresolved',
+        `Refused because the paused call could not be matched to its arguments. ${call.toolName} was not checked against the write perimeter or the credential tripwire, and could not be shown to an operator. No human was asked.`,
+      );
+      renderUnresolved(call);
+      continue;
+    }
+
     const verdict = checkPerimeter(call.args, writePaths);
     if (verdict.status === 'blocked') {
       settle(
@@ -294,6 +310,31 @@ function renderBlocked(call: PendingCall, offending: Offender[], writePaths: str
 }
 
 /**
+ * A pause we could not tie back to a tool call. Rare, and never routine: it
+ * means the stream carried a shape the client does not understand, so the honest
+ * response is to refuse and say why rather than approve something unseen.
+ */
+function renderUnresolved(call: PendingCall): void {
+  console.log(`\n${style.red('━'.repeat(64))}`);
+  console.log(style.red(style.bold('  BLOCKED — CALL COULD NOT BE INSPECTED')));
+  console.log(style.dim('  Denied automatically. No approval was offered.'));
+  console.log(`${style.red('━'.repeat(64))}\n`);
+
+  console.log(`  ${style.bold(style.cyan(call.toolName))}`);
+  console.log(
+    renderFields(
+      [
+        ['tool call', call.toolCallId || '(none)'],
+        ['thread', call.threadId],
+        ['reason', 'arguments could not be resolved from the stream'],
+      ],
+      PAD,
+    ),
+  );
+  console.log('');
+}
+
+/**
  * A write carrying something that looks like a credential. Same treatment as a
  * perimeter breach: refused before anyone is invited to wave it through.
  */
@@ -347,12 +388,14 @@ function renderCall(
     console.log(`${PAD}${style.red(`!! possible ${describeFinding(warning)}`)}`);
   }
 
-  if (summary.body) {
-    console.log(`\n${PAD}${style.dim(summary.body.label)}`);
-    console.log(indent(numberLines(summary.body.text), PAD));
+  // Every payload, so one "y" never authorises a file the operator never saw.
+  for (const body of summary.bodies) {
+    console.log(`\n${PAD}${style.dim(body.label)}`);
+    if (body.text === '') console.log(`${PAD}${style.red('(no content)')}`);
+    else console.log(indent(numberLines(body.text), PAD));
   }
 
-  if (summary.fields.length === 0 && !summary.body) {
+  if (summary.fields.length === 0 && summary.bodies.length === 0) {
     console.log(style.dim(indent(preview(call.args, 1200), PAD)));
   }
 
