@@ -35,7 +35,9 @@ export async function requestClearance(pending: PendingCall[]): Promise<Decision
   console.log(style.yellow(style.bold('  CLEARANCE REQUIRED')));
   console.log(
     style.dim(
-      `  The agent wants to run ${pending.length} action${pending.length === 1 ? '' : 's'} that write to your repository.`,
+      pending.length === 1
+        ? '  The agent wants to run 1 action that writes to your repository.'
+        : `  The agent wants to run ${pending.length} actions that write to your repository.`,
     ),
   );
   console.log(`${style.yellow('━'.repeat(64))}\n`);
