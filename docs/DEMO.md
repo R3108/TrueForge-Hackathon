@@ -9,7 +9,7 @@ Submission requires a 3:00 video. Presentation is one of six equally-weighted ju
 - [ ] A real, seeded bug in the target repo with a matching Sentry issue
 - [ ] Terminal font large enough to read at 720p
 - [ ] Qodo installed on the repo, so its review lands on camera
-- [ ] Do one full dry run — the first run always finds something
+- [ ] Do one full dry run — `npm run dispatch -- --rehearse <issue-id>` refuses every write, so the rehearsal costs you nothing and the first run always finds something
 
 ## The cut
 
@@ -57,6 +57,8 @@ The PR on GitHub. Scroll the body: Sentry link, root cause, the diff, test evide
 Then Qodo's review appears on it.
 
 > "Agent opens the PR. Qodo reviews it. A human approved the one step that touches the repo."
+
+If you have three spare seconds, cut back to the terminal at the end of the run: the decision table, the audit digest, `npm run journal` verifying the chain. *"And there's a record of it — the denial, the approval, and a digest that changes if anyone edits the file."* Only if it fits; the denial is worth more.
 
 **2:50–3:00 — Close**
 

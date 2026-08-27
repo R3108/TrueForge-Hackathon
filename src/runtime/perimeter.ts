@@ -11,6 +11,13 @@
  * is ever asked, so the boundary is not something an operator can be talked
  * through at 3am.
  *
+ * A pattern prefixed with `!` is an exclusion, and exclusions win. That matters
+ * because an allowlist alone is coarse: `fixture/**` is the right grant for a
+ * service under repair, but nothing inside it should let the agent rewrite the
+ * fixture's own CI workflow, which is what verifies its patch.
+ *
+ *     LTP_WRITE_PATHS=fixture/**,!fixture/.github/**
+ *
  * Scope, stated honestly: this is enforced in the dispatch client, so it governs
  * `npm run dispatch`. Driving the same agent from the TrueForge chat UI bypasses
  * it, because the harness itself only knows the repository-level gate.
@@ -18,11 +25,31 @@
 
 import { pathsIn } from './render.ts';
 
+/** Why a single path was refused. */
+export interface Offender {
+  path: string;
+  /** `outside`: matched no allow pattern. `excluded`: matched a `!` pattern. */
+  rule: 'outside' | 'excluded';
+  /** The exclusion that caught it, when there was one. */
+  pattern?: string;
+}
+
 export type PerimeterVerdict =
   /** The call writes only inside the perimeter, or carries no paths to judge. */
   | { status: 'allowed' }
   /** The call writes outside the perimeter and must never reach a human. */
-  | { status: 'blocked'; offending: string[] };
+  | { status: 'blocked'; offending: Offender[] };
+
+/** A perimeter split into what it grants and what it takes back. */
+export interface PerimeterRules {
+  allow: string[];
+  deny: string[];
+}
+
+export type PathVerdict =
+  | { status: 'inside'; pattern: string }
+  | { status: 'outside' }
+  | { status: 'excluded'; pattern: string };
 
 /**
  * Normalise a repository path for comparison: forward slashes, no leading
@@ -84,15 +111,52 @@ export function globToRegExp(glob: string): RegExp {
   return new RegExp(`^${source}$`);
 }
 
-/** Does this path sit inside at least one of the perimeter's patterns? */
-export function isInsidePerimeter(path: string, patterns: string[]): boolean {
-  const normalized = normalizePath(path);
-  if (!normalized) return false;
+function tidyPattern(pattern: string): string {
+  return pattern.trim().replace(/\\/g, '/').replace(/^\.\//, '');
+}
 
-  return patterns.some((pattern) => {
-    const normalizedPattern = pattern.replace(/\\/g, '/').replace(/^\.\//, '');
-    return globToRegExp(normalizedPattern).test(normalized);
-  });
+/**
+ * Split a declared perimeter into grants and exclusions.
+ *
+ * A perimeter of exclusions only (`!secrets/**` and nothing else) grants
+ * nothing at all rather than everything-but. Read as an allowlist it is empty,
+ * and an empty allowlist should fail closed - the alternative silently turns a
+ * typo into blanket write access to the repository.
+ */
+export function compilePerimeter(patterns: string[]): PerimeterRules {
+  const allow: string[] = [];
+  const deny: string[] = [];
+
+  for (const raw of patterns) {
+    const pattern = tidyPattern(raw);
+    if (!pattern) continue;
+    if (pattern.startsWith('!')) {
+      // Re-tidy: the `./` in `!./fixture/.env` sits after the negation marker.
+      const negated = tidyPattern(pattern.slice(1));
+      if (negated) deny.push(negated);
+    } else {
+      allow.push(pattern);
+    }
+  }
+
+  return { allow, deny };
+}
+
+/** Judge one path, and say which rule decided it. */
+export function judgePath(path: string, rules: PerimeterRules): PathVerdict {
+  const normalized = normalizePath(path);
+  if (!normalized) return { status: 'outside' };
+
+  const excluded = rules.deny.find((pattern) => globToRegExp(pattern).test(normalized));
+  if (excluded) return { status: 'excluded', pattern: excluded };
+
+  const granted = rules.allow.find((pattern) => globToRegExp(pattern).test(normalized));
+  return granted ? { status: 'inside', pattern: granted } : { status: 'outside' };
+}
+
+/** Does this path sit inside at least one grant, and outside every exclusion? */
+export function isInsidePerimeter(path: string, patterns: string[]): boolean {
+  return judgePath(path, compilePerimeter(patterns)).status === 'inside';
 }
 
 /**
@@ -106,9 +170,27 @@ export function isInsidePerimeter(path: string, patterns: string[]): boolean {
 export function checkPerimeter(args: unknown, patterns: string[]): PerimeterVerdict {
   if (patterns.length === 0) return { status: 'allowed' };
 
+  const rules = compilePerimeter(patterns);
   const paths = pathsIn((args ?? {}) as Record<string, unknown>);
   if (paths.length === 0) return { status: 'allowed' };
 
-  const offending = paths.filter((path) => !isInsidePerimeter(path, patterns));
+  const offending: Offender[] = [];
+  for (const path of paths) {
+    const verdict = judgePath(path, rules);
+    if (verdict.status === 'inside') continue;
+    offending.push(
+      verdict.status === 'excluded'
+        ? { path, rule: 'excluded', pattern: verdict.pattern }
+        : { path, rule: 'outside' },
+    );
+  }
+
   return offending.length > 0 ? { status: 'blocked', offending } : { status: 'allowed' };
+}
+
+/** One offending path, phrased for a denial reason or a terminal line. */
+export function describeOffender(offender: Offender): string {
+  return offender.rule === 'excluded'
+    ? `${offender.path} (excluded by !${offender.pattern})`
+    : offender.path;
 }
