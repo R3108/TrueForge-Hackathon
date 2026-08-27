@@ -79,13 +79,45 @@ Turns chain automatically (`previous_turn_id` defaults to `auto`), so the agent 
 | Agent can't reproduce the bug | Instructed to report it and stop, never to patch blind |
 | Agent invents a passing test suite | Instructions forbid it; the sandbox output is in the trace for a human to check |
 | Nobody is at the terminal | `approvals.ts` denies every pending write — fails closed |
+| Operator walks away mid-prompt | Ctrl-C denies the write in front of them and every one behind it |
+| Agent tries to patch its own gate | `perimeter.ts` refuses it before a human is asked |
+| Agent pastes a token into the patch | `secrets.ts` refuses the payload before a human is asked |
+| Someone widens the perimeter in a PR | CI asserts the control plane is unreachable; the PR fails |
+| Someone edits the agent in the UI | `npm run doctor` compares the server's gate against the repo's spec |
 | Runaway agent loop | `iteration_limit: 120` in the spec; `MAX_RESUMES` in the client |
 | Connector unauthorized mid-demo | `npm run doctor` catches it before you start |
 | Oversized tool output floods context | Harness large-response offloading writes it to a sandbox file |
 | An event type we've never seen | The renderer tolerates unknown types rather than crashing the run |
+| "What did it actually do?" after the fact | `journal.ts` — a hash-chained record of every decision, verifiable later |
+
+## Three checks, in the order they run
+
+A gated tool call passes through three things before anyone is asked, and the order is the design:
+
+```
+tool.approval_required
+        │
+        ▼
+  1  write perimeter    where?   ── outside ──►  DENIED, no human asked
+        │ inside
+        ▼
+  2  credential tripwire what?   ── found ────►  DENIED, no human asked
+        │ clean
+        ▼
+  3  the human           should we?            ── no TTY / Ctrl-C ──► DENIED
+        │
+        ▼
+     approved  ──►  the call runs
+
+  every outcome above ──►  appended to the decision journal
+```
+
+The first two refuse rather than warn. That is the whole argument: a boundary an operator can be walked through at 3am is a boundary that will be walked through at 3am, and the two questions those stages answer — *is this file mine to write?* and *is this payload a credential?* — are exactly the two a tired human is worst at. The third question, *is this the right fix?*, is the one only a person can answer, and it is the only one they are asked.
 
 ## Deliberate limitations
 
 - **One repository per deployment.** `LTP_TARGET_REPO` is a single repo by design. A multi-repo agent needs a permission model this hackathon build doesn't have.
 - **Sentry is the only incident source.** The playbook generalizes to any error tracker with an MCP server; only Sentry is wired.
 - **The gate is per-call, so a large fix means several prompts.** That is the intended trade. Batching approvals would put distance back between what is approved and what runs.
+- **The perimeter and the tripwire live in the client, not the harness.** They govern `npm run dispatch`, which is the operating path — but they are not properties of the agent itself. See [SECURITY.md](../SECURITY.md) for what that does and does not buy you.
+- **The journal proves integrity, not identity.** It detects an edited or reordered record; it does not attest to who was at the keyboard. Signing it would need a key, and a key would need somewhere safe to live.

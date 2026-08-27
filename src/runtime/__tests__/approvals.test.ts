@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { stdin } from 'node:process';
 
 import { requestClearance, type PendingCall } from '../approvals.ts';
+import { Journal } from '../journal.ts';
 
 /**
  * The safety claim of this project is that the agent cannot write to a
@@ -16,6 +17,12 @@ const call = (overrides: Partial<PendingCall> = {}): PendingCall => ({
   args: { title: 'Fix null deref in cart.ts' },
   ...overrides,
 });
+
+const reasonOf = (decision: { approval: unknown } | undefined): string =>
+  (decision?.approval as { reason?: string })?.reason ?? '';
+
+/** In-memory journal: no `dir`, so nothing is written to disk. */
+const journal = (): Journal => new Journal({ sessionId: 'test', incident: 'TEST-1' });
 
 describe('requestClearance', () => {
   let originalIsTTY: boolean | undefined;
@@ -61,7 +68,7 @@ describe('requestClearance', () => {
     assert.ok(decision, 'expected a decision');
     assert.equal(decision.approval.status, 'deny');
     assert.match(
-      (decision.approval as { reason: string }).reason,
+      reasonOf(decision),
       /non-interactive/i,
       'the denial reason should tell the agent why it was refused',
     );
@@ -73,16 +80,32 @@ describe('requestClearance', () => {
 
     const decisions = await requestClearance(
       [call({ toolName: 'create_or_update_file', args: { path: 'src/agent/spec.ts' } })],
-      ['fixture/**'],
+      { writePaths: ['fixture/**'] },
     );
 
     assert.equal(decisions.length, 1);
     assert.equal(decisions[0]?.approval.status, 'deny');
     assert.match(
-      (decisions[0]?.approval as { reason: string }).reason,
+      reasonOf(decisions[0]),
       /perimeter/i,
       'the agent should be told which boundary it hit',
     );
+  });
+
+  test('names the exclusion when one refused the write', async () => {
+    stdin.isTTY = true;
+
+    const decisions = await requestClearance(
+      [
+        call({
+          toolName: 'create_or_update_file',
+          args: { path: 'fixture/.github/workflows/ci.yml', content: 'on: push' },
+        }),
+      ],
+      { writePaths: ['fixture/**', '!fixture/.github/**'] },
+    );
+
+    assert.match(reasonOf(decisions[0]), /excluded by !fixture\/\.github/);
   });
 
   test('does not let a perimeter breach ride along with a legitimate write', async () => {
@@ -93,7 +116,7 @@ describe('requestClearance', () => {
         call({ toolCallId: 'inside', args: { path: 'fixture/src/cart.js' } }),
         call({ toolCallId: 'outside', args: { path: 'src/runtime/approvals.ts' } }),
       ],
-      ['fixture/**'],
+      { writePaths: ['fixture/**'] },
     );
 
     assert.equal(decisions.length, 2, 'every call must still be answered');
@@ -117,6 +140,74 @@ describe('requestClearance', () => {
         ['call_b', 'sub_7f2a'],
       ],
       'a decision routed to the wrong call would approve something unreviewed',
+    );
+  });
+
+  test('refuses a payload carrying a credential without asking a human', async () => {
+    stdin.isTTY = true;
+
+    // Assembled at runtime so this file never contains a token-shaped literal
+    // for a secret scanner - ours or GitHub's - to trip over.
+    const token = `ghp_${'a1B2c3D4e5F6g7H8i9J0'}${'kLmNoPqRsTuVwXyZ0123'}`;
+
+    const decisions = await requestClearance(
+      [
+        call({
+          toolName: 'create_or_update_file',
+          args: { path: 'fixture/src/client.js', content: `const auth = "${token}";` },
+        }),
+      ],
+      { writePaths: ['fixture/**'] },
+    );
+
+    assert.equal(decisions[0]?.approval.status, 'deny');
+    assert.match(reasonOf(decisions[0]), /tripwire/i);
+    assert.doesNotMatch(reasonOf(decisions[0]), new RegExp(token), 'never echo the secret back');
+  });
+
+  test('lets a credential through to the human when the policy says warn', async () => {
+    stdin.isTTY = false; // denied for lack of a TTY, not by the tripwire
+
+    const token = `ghp_${'a1B2c3D4e5F6g7H8i9J0'}${'kLmNoPqRsTuVwXyZ0123'}`;
+    const decisions = await requestClearance(
+      [call({ toolName: 'create_or_update_file', args: { path: 'fixture/a.js', content: token } })],
+      { writePaths: ['fixture/**'], secretPolicy: 'warn' },
+    );
+
+    assert.match(reasonOf(decisions[0]), /non-interactive/i);
+  });
+
+  test('a rehearsal refuses every write even with a human at the terminal', async () => {
+    stdin.isTTY = true;
+
+    const decisions = await requestClearance(
+      [call({ toolName: 'create_pull_request', args: { title: 'Fix' } })],
+      { rehearse: true },
+    );
+
+    assert.equal(decisions[0]?.approval.status, 'deny');
+    assert.match(reasonOf(decisions[0]), /rehearsal/i);
+  });
+
+  test('journals every automatic refusal, with the paths it refused', async () => {
+    stdin.isTTY = false;
+    const log = journal();
+
+    await requestClearance(
+      [
+        call({ toolCallId: 'a', args: { path: 'src/agent/spec.ts' } }),
+        call({ toolCallId: 'b', args: { path: 'fixture/src/cart.js' } }),
+      ],
+      { writePaths: ['fixture/**'], journal: log },
+    );
+
+    assert.deepEqual(
+      log.entries().map((entry) => [entry.toolCallId, entry.outcome, entry.paths]),
+      [
+        ['a', 'blocked-perimeter', ['src/agent/spec.ts']],
+        ['b', 'denied-no-tty', ['fixture/src/cart.js']],
+      ],
+      'the record has to distinguish "nobody was asked" from "nobody was there"',
     );
   });
 });

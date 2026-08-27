@@ -1,7 +1,7 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { preview, numberLines, summarizeCall, summarizeInline } from '../render.ts';
+import { preview, numberLines, summarizeCall, summarizeInline, payloadsIn } from '../render.ts';
 
 describe('preview', () => {
   test('leaves short values intact', () => {
@@ -122,6 +122,43 @@ describe('summarizeCall', () => {
   test('survives a tool it has never seen', () => {
     assert.doesNotThrow(() => summarizeCall('some_future_tool', { wat: 1 }));
     assert.doesNotThrow(() => summarizeCall('create_branch', null));
+  });
+});
+
+describe('payloadsIn', () => {
+  test('collects every file body, not just the one on screen', () => {
+    const payloads = payloadsIn({
+      files: [
+        { path: 'fixture/src/cart.js', content: 'a' },
+        { path: 'fixture/src/client.js', content: 'b' },
+      ],
+    });
+
+    assert.deepEqual(
+      payloads.map((payload) => payload.label),
+      ['fixture/src/cart.js', 'fixture/src/client.js'],
+      'the scanner must see the file the reviewer never scrolled to',
+    );
+  });
+
+  test('labels a single file body with its path', () => {
+    assert.deepEqual(payloadsIn({ path: 'fixture/a.js', content: 'x' }), [
+      { label: 'fixture/a.js', text: 'x' },
+    ]);
+  });
+
+  test('includes prose destined for the repository', () => {
+    const labels = payloadsIn({
+      title: 'Fix null deref',
+      body: 'Root cause: …',
+      message: 'fix: guard against a missing cart',
+    }).map((payload) => payload.label);
+
+    assert.deepEqual(labels, ['body', 'message']);
+  });
+
+  test('returns nothing for a call that writes no text', () => {
+    assert.deepEqual(payloadsIn({ branch: 'fix/x', base: 'main' }), []);
   });
 });
 

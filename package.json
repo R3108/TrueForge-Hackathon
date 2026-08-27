@@ -13,6 +13,8 @@
     "provision": "node --env-file-if-exists=.env --experimental-strip-types src/cli/provision.ts",
     "dispatch": "node --env-file-if-exists=.env --experimental-strip-types src/cli/dispatch.ts",
     "doctor": "node --env-file-if-exists=.env --experimental-strip-types src/cli/doctor.ts",
+    "perimeter": "node --env-file-if-exists=.env --experimental-strip-types src/cli/perimeter.ts",
+    "journal": "node --env-file-if-exists=.env --experimental-strip-types src/cli/journal.ts",
     "test": "node --experimental-strip-types --test \"src/**/*.test.ts\""
   },
   "dependencies": {
