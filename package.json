@@ -10,9 +10,9 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "provision": "node --experimental-strip-types src/cli/provision.ts",
-    "dispatch": "node --experimental-strip-types src/cli/dispatch.ts",
-    "doctor": "node --experimental-strip-types src/cli/doctor.ts",
+    "provision": "node --env-file-if-exists=.env --experimental-strip-types src/cli/provision.ts",
+    "dispatch": "node --env-file-if-exists=.env --experimental-strip-types src/cli/dispatch.ts",
+    "doctor": "node --env-file-if-exists=.env --experimental-strip-types src/cli/doctor.ts",
     "test": "node --experimental-strip-types --test \"src/**/*.test.ts\""
   },
   "dependencies": {

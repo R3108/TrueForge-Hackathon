@@ -1,3 +1,4 @@
+import type { TrueForgeApi } from '@truefoundry/trueforge-sdk';
 import type { Config } from '../config.ts';
 
 export const AGENT_NAME = 'licence-to-patch';
@@ -99,54 +100,54 @@ prose for reasoning. Keep it tight - the person reading you is on call too.
  * Everything here is declarative and version-controlled: the agent that runs in
  * the demo is exactly the agent in this file, and a reviewer can diff it.
  */
-export function buildAgentSpec(config: Config) {
+export function buildAgentSpec(config: Config): TrueForgeApi.AgentSpec {
   return {
     model: {
       name: config.model,
       params: {
         // Low temperature: this agent writes patches, not poetry.
         temperature: 0.1,
-        max_tokens: 8192,
+        maxTokens: 8192,
       },
     },
 
     instructions: `${INSTRUCTIONS}\n\n## This deployment\n\nTarget repository: ${config.targetRepo}\nBase branch: ${config.baseBranch}`,
 
-    mcp_servers: [
+    mcpServers: [
       {
         // Read-only by nature: the agent reads incidents, it never mutates Sentry.
         name: config.connectors.sentry,
-        enable_tools: ['@read-only'],
-        require_approval_for_tools: [],
+        enableTools: ['@read-only'],
+        requireApprovalForTools: [],
         preload: true,
       },
       {
         name: config.connectors.github,
-        enable_tools: ['@all'],
+        enableTools: ['@all'],
         // The control surface of this whole project: reads are autonomous,
         // every write to the repository stops for a human.
-        require_approval_for_tools: [...GITHUB_WRITE_TOOLS],
+        requireApprovalForTools: [...GITHUB_WRITE_TOOLS],
         preload: false,
       },
     ],
 
     config: {
       // Required: stage 3 reproduces the bug and runs the test suite in here.
-      sandbox: { enabled: true, file_downloads: true },
-      generative_ui: { enabled: true },
-      ask_user_questions: { enabled: true },
-      dynamic_sub_agents: { enabled: true },
-      context_management: {
+      sandbox: { enabled: true, fileDownloads: true },
+      generativeUi: { enabled: true },
+      askUserQuestions: { enabled: true },
+      dynamicSubAgents: { enabled: true },
+      contextManagement: {
         compaction: {
           enabled: true,
-          trigger: { type: 'input_tokens', value: 120000 },
+          compactionThresholdTokens: 120000,
         },
-        large_tool_response: { enabled: true },
+        largeToolResponse: { enabled: true },
       },
       // A repair run is long: read, reproduce, patch, test, re-test, open PR.
-      iteration_limit: 120,
+      iterationLimit: 120,
     },
   };
 }
 
-export type AgentSpec = ReturnType<typeof buildAgentSpec>;
+export type AgentSpec = TrueForgeApi.AgentSpec;

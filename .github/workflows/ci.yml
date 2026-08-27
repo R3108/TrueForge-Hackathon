@@ -1,0 +1,50 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  harness:
+    name: harness (agent + gate)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          # TrueForge needs 22.14+; the CLIs run TypeScript directly via
+          # --experimental-strip-types rather than compiling first.
+          node-version: '22.14'
+          cache: npm
+
+      - run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Test
+        run: npm test
+
+  fixture:
+    name: fixture (the service under repair)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: fixture
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: fixture/package-lock.json
+
+      - run: npm ci
+
+      # The agent's claim is that it turns a red test green without breaking
+      # the rest of the suite. This is what checks that claim on its pull
+      # request, independently of anything the agent says about itself.
+      - run: npm test

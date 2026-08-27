@@ -23,7 +23,7 @@ Show the Sentry issue on screen. Real error, real stack trace.
 
 > "Licence to Patch does the whole job autonomously — and physically cannot touch your repository without you. Built on TrueForge."
 
-Show `src/agent/spec.ts`, scrolled to `require_approval_for_tools`. Ten tool names. Don't read them out; let them sit on screen while you talk.
+Show `src/agent/spec.ts`, scrolled to `requireApprovalForTools`. Ten tool names. Don't read them out; let them sit on screen while you talk.
 
 **0:35–1:45 — The run**
 

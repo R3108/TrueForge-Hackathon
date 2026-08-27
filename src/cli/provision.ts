@@ -8,6 +8,7 @@
 import { loadConfig } from '../config.ts';
 import { createClient } from '../client.ts';
 import { AGENT_NAME, buildAgentSpec, GITHUB_WRITE_TOOLS } from '../agent/spec.ts';
+import { findAgentId } from '../agent/registry.ts';
 import { banner, style } from '../runtime/render.ts';
 
 async function main(): Promise<void> {
@@ -24,43 +25,20 @@ async function main(): Promise<void> {
     `  approval gate ${style.yellow(`${GITHUB_WRITE_TOOLS.length} repository-writing tools`)}\n`,
   );
 
-  const agents = client.agents as unknown as {
-    list: (args?: unknown) => Promise<{ data: unknown }>;
-    create: (args: unknown) => Promise<{ data: { id: string } }>;
-    update: (id: string, args: unknown) => Promise<{ data: { id: string } }>;
-  };
-
-  const existingId = await findAgentId(agents, AGENT_NAME);
+  const existingId = await findAgentId(client, AGENT_NAME);
 
   if (existingId) {
-    const { data } = await agents.update(existingId, { name: AGENT_NAME, spec });
+    // `name` is immutable server-side, so an update replaces the manifest only.
+    const { data } = await client.agents.update(existingId, { manifest: spec });
     console.log(`${style.green('Updated')} agent ${style.bold(AGENT_NAME)} (${data.id})`);
   } else {
-    const { data } = await agents.create({ name: AGENT_NAME, spec });
+    const { data } = await client.agents.create({ name: AGENT_NAME, manifest: spec });
     console.log(`${style.green('Created')} agent ${style.bold(AGENT_NAME)} (${data.id})`);
   }
 
   console.log(
     `\n${style.dim('Next:')} npm run dispatch -- <sentry-issue-id>   ${style.dim('(or open the TrueForge chat UI)')}\n`,
   );
-}
-
-async function findAgentId(
-  agents: { list: (args?: unknown) => Promise<{ data: unknown }> },
-  name: string,
-): Promise<string | undefined> {
-  try {
-    const { data } = await agents.list();
-    const items = Array.isArray(data)
-      ? data
-      : ((data as { items?: unknown[] } | null)?.items ?? []);
-    const match = (items as Array<{ id?: string; name?: string }>).find((a) => a?.name === name);
-    return match?.id;
-  } catch {
-    // A server with no agents yet, or an older list shape - treat as "not found"
-    // and let create() be the source of truth.
-    return undefined;
-  }
 }
 
 main().catch((error: unknown) => {

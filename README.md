@@ -58,8 +58,8 @@ Every repository-mutating tool is named explicitly in the agent spec and gated:
 // src/agent/spec.ts
 {
   name: config.connectors.github,
-  enable_tools: ['@all'],
-  require_approval_for_tools: [
+  enableTools: ['@all'],
+  requireApprovalForTools: [
     'create_branch',      'create_or_update_file', 'push_files',
     'delete_file',        'create_pull_request',   'update_pull_request',
     'merge_pull_request', 'create_issue',          'update_issue',
@@ -70,9 +70,42 @@ Every repository-mutating tool is named explicitly in the agent spec and gated:
 
 Reads run free. Writes stop dead. Three properties follow:
 
+
+
 - **Secrets never reach the sandbox.** TrueForge runs the sandbox *as a tool*, not as the agent's home — the loop and its credentials stay on the server. Code the agent writes executes in an isolated environment that has never seen your GitHub token.
 - **Denial is a real outcome.** Deny a call and the agent receives your reason, explains what it would need to proceed, and stops. It does not retry around you.
 - **It fails closed.** No TTY — CI, a piped stdin, an unattended run — and every pending write is denied automatically. The unsafe direction is never the default.
+
+## The write perimeter
+
+There is a hole in the design above, and closing it is the second half of this project.
+
+`LTP_TARGET_REPO` is **repo-granular**. Once the agent may write to a repository, the harness will let it write anywhere in that repository. The service it repairs, [`fixture/`](fixture/), lives in this same repository — so without a further control, the agent could open a pull request that edits `src/agent/spec.ts` and removes its own approval gate. A tired operator at 3am would see a normal-looking approval prompt.
+
+So the boundary is declared in code:
+
+```
+LTP_WRITE_PATHS=fixture/**
+```
+
+Any write touching a path outside the perimeter is **denied before a human is asked**. Not shown in red, not prompted with a warning — never offered:
+
+```
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  BLOCKED BY WRITE PERIMETER
+  Denied automatically. No approval was offered.
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  create_or_update_file
+        outside    src/agent/spec.ts
+        perimeter  fixture/**
+```
+
+The agent receives the denial and the reason, and can explain what it would need — it simply cannot get there. Path traversal is resolved before matching, so `fixture/../src/agent/spec.ts` is outside the perimeter too; a boundary you can walk out of with `../` is not a boundary. A multi-file push is rejected whole if any single file escapes.
+
+**What this is not.** The perimeter is enforced in the dispatch client, so it governs `npm run dispatch`. Someone driving the same agent from the TrueForge chat UI gets the harness's repository-level gate and nothing more. It is a real control on the real operating path, not a sandbox escape-proof boundary, and it is worth being precise about which of those you are being sold.
+
+See [`src/runtime/perimeter.ts`](src/runtime/perimeter.ts) and its tests.
 
 ## What TrueForge is doing here
 
@@ -123,12 +156,15 @@ src/
   config.ts            env → typed config (names and URLs only, never secrets)
   client.ts            TrueForge client, with a timeout a real repair survives
   agent/spec.ts        THE AGENT — instructions, tools, approval gate, sandbox
+  agent/registry.ts    look up a saved agent by name
   runtime/run.ts       stream a turn, collect pauses, resume until settled
   runtime/approvals.ts the human gate; fails closed without a TTY
-  runtime/render.ts    terminal rendering
+  runtime/perimeter.ts the write perimeter; denies before a human is asked
+  runtime/render.ts    terminal rendering, and what a write actually touches
   cli/provision.ts     create/update the saved agent from the spec
   cli/dispatch.ts      run one incident end to end
   cli/doctor.ts        pre-flight checks
+fixture/               the service under repair — the only place the agent may write
 docs/
   ARCHITECTURE.md      how the pieces fit, and why the gate sits where it does
   DEMO.md              the three-minute demo script
@@ -145,7 +181,7 @@ Every substantive change lands through a pull request reviewed by **[Qodo](https
 ## Safety and scope
 
 - The agent only ever writes to the single repository named in `LTP_TARGET_REPO`.
-- Sentry is attached read-only (`enable_tools: ['@read-only']`) — incidents are read, never mutated.
+- Sentry is attached read-only (`enableTools: ['@read-only']`) — incidents are read, never mutated.
 - Credentials live in TrueForge connectors. This repository contains no tokens, and `.env` is git-ignored.
 - One PR per incident, always branched off the base branch, never pushed to it.
 
