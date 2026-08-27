@@ -1,7 +1,14 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { checkPerimeter, isInsidePerimeter, normalizePath, globToRegExp } from '../perimeter.ts';
+import {
+  checkPerimeter,
+  compilePerimeter,
+  globToRegExp,
+  isInsidePerimeter,
+  judgePath,
+  normalizePath,
+} from '../perimeter.ts';
 
 /**
  * The perimeter exists so the agent cannot rewrite the gate that restrains it.
@@ -64,6 +71,42 @@ describe('isInsidePerimeter', () => {
   });
 });
 
+describe('exclusions', () => {
+  const WITH_EXCLUSION = ['fixture/**', '!fixture/.github/**'];
+
+  test('an exclusion beats the grant that contains it', () => {
+    assert.ok(isInsidePerimeter('fixture/src/cart.js', WITH_EXCLUSION));
+    assert.ok(
+      !isInsidePerimeter('fixture/.github/workflows/ci.yml', WITH_EXCLUSION),
+      'the agent must not be able to rewrite the CI that verifies its patch',
+    );
+  });
+
+  test('names the exclusion that refused a path, so the denial is explainable', () => {
+    const verdict = judgePath(
+      'fixture/.github/workflows/ci.yml',
+      compilePerimeter(WITH_EXCLUSION),
+    );
+
+    assert.equal(verdict.status, 'excluded');
+    assert.equal(verdict.status === 'excluded' ? verdict.pattern : '', 'fixture/.github/**');
+  });
+
+  test('a perimeter of exclusions only grants nothing, rather than everything', () => {
+    assert.ok(
+      !isInsidePerimeter('fixture/src/cart.js', ['!secrets/**']),
+      'reading an empty allowlist as "allow all" would turn a typo into blanket write access',
+    );
+  });
+
+  test('tolerates whitespace and ./ prefixes around a negation', () => {
+    assert.deepEqual(compilePerimeter([' ./fixture/** ', ' ! ./fixture/.env ']), {
+      allow: ['fixture/**'],
+      deny: ['fixture/.env'],
+    });
+  });
+});
+
 describe('checkPerimeter', () => {
   test('blocks a write to the approval gate itself', () => {
     const verdict = checkPerimeter(
@@ -74,7 +117,7 @@ describe('checkPerimeter', () => {
     assert.equal(verdict.status, 'blocked');
     assert.deepEqual(
       verdict.status === 'blocked' ? verdict.offending : [],
-      ['src/runtime/approvals.ts'],
+      [{ path: 'src/runtime/approvals.ts', rule: 'outside' }],
     );
   });
 
@@ -94,7 +137,9 @@ describe('checkPerimeter', () => {
     );
 
     assert.equal(verdict.status, 'blocked', 'one bad file must sink the whole call');
-    assert.deepEqual(verdict.status === 'blocked' ? verdict.offending : [], ['src/agent/spec.ts']);
+    assert.deepEqual(verdict.status === 'blocked' ? verdict.offending : [], [
+      { path: 'src/agent/spec.ts', rule: 'outside' },
+    ]);
   });
 
   test('is inert when no perimeter is declared', () => {

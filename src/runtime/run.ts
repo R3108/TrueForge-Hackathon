@@ -1,6 +1,6 @@
 import type { TrueForge, TrueForgeApi } from '@truefoundry/trueforge-sdk';
 import { style, preview, summarizeInline } from './render.ts';
-import { requestClearance, type PendingCall } from './approvals.ts';
+import { requestClearance, type ClearanceOptions, type PendingCall } from './approvals.ts';
 
 /**
  * Anything the harness streams. The SDK ships precise per-event types, but the
@@ -31,7 +31,7 @@ export async function runIncident(
   client: TrueForge,
   sessionId: string,
   brief: string,
-  writePaths: string[] = [],
+  clearance: ClearanceOptions = {},
 ): Promise<{ turns: number; finalOutput: string }> {
   let input: TurnInput[] = [{ type: 'user.message', content: brief }];
   let turns = 0;
@@ -47,7 +47,7 @@ export async function runIncident(
       return { turns, finalOutput };
     }
 
-    const decisions = await requestClearance(pending, writePaths);
+    const decisions = await requestClearance(pending, clearance);
     input = decisions;
   }
 

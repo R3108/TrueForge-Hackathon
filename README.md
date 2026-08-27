@@ -74,7 +74,7 @@ Reads run free. Writes stop dead. Three properties follow:
 
 - **Secrets never reach the sandbox.** TrueForge runs the sandbox *as a tool*, not as the agent's home — the loop and its credentials stay on the server. Code the agent writes executes in an isolated environment that has never seen your GitHub token.
 - **Denial is a real outcome.** Deny a call and the agent receives your reason, explains what it would need to proceed, and stops. It does not retry around you.
-- **It fails closed.** No TTY — CI, a piped stdin, an unattended run — and every pending write is denied automatically. The unsafe direction is never the default.
+- **It fails closed.** No TTY — CI, a piped stdin, an unattended run — and every pending write is denied automatically. Ctrl-C at a prompt is an answer, not an absence of one: the write in front of you and every write behind it are denied. The unsafe direction is never the default.
 
 ## The write perimeter
 
@@ -103,9 +103,88 @@ Any write touching a path outside the perimeter is **denied before a human is as
 
 The agent receives the denial and the reason, and can explain what it would need — it simply cannot get there. Path traversal is resolved before matching, so `fixture/../src/agent/spec.ts` is outside the perimeter too; a boundary you can walk out of with `../` is not a boundary. A multi-file push is rejected whole if any single file escapes.
 
+A grant alone is still too coarse. `fixture/**` is the right thing to hand an agent repairing that service, but nothing inside it should let the agent rewrite the CI workflow that *checks* its patch. So a `!` pattern carves an exception out of a grant, and exceptions win:
+
+```
+LTP_WRITE_PATHS=fixture/**,!fixture/.github/**
+```
+
+**You can ask the boundary what it would do, without running the agent:**
+
+```bash
+npm run perimeter -- fixture/src/cart.js fixture/.github/workflows/ci.yml src/agent/spec.ts
+
+ALLOW  fixture/src/cart.js               matches fixture/**
+BLOCK  fixture/.github/workflows/ci.yml  excluded by !fixture/.github/**
+BLOCK  src/agent/spec.ts                 outside every grant
+```
+
+And because the perimeter is the one control that protects all the others, CI asserts it on every pull request:
+
+```yaml
+- name: Perimeter holds against the control plane
+  run: npm run perimeter -- --expect-blocked src/agent/spec.ts src/runtime/approvals.ts …
+```
+
+A pull request that widens the perimeter far enough to reach the approval gate fails CI before a human reads the diff — which matters, because the change that quietly removes a boundary is exactly the change nobody reads carefully. `npm run doctor` makes the same check against your live `.env`.
+
 **What this is not.** The perimeter is enforced in the dispatch client, so it governs `npm run dispatch`. Someone driving the same agent from the TrueForge chat UI gets the harness's repository-level gate and nothing more. It is a real control on the real operating path, not a sandbox escape-proof boundary, and it is worth being precise about which of those you are being sold.
 
 See [`src/runtime/perimeter.ts`](src/runtime/perimeter.ts) and its tests.
+
+## The credential tripwire
+
+The perimeter decides *where* the agent may write. This decides *what*.
+
+Stage 3 runs real code in a sandbox. An agent debugging an auth failure legitimately ends up holding a token in its context, and the most natural thing in the world is to paste the value that finally made the test pass straight into the patch. Nothing about the approval prompt catches that: the diff looks fine, because a leaked secret looks exactly like a working config.
+
+So every payload bound for the repository — each file in a multi-file push, the commit message, the PR body — is scanned before it is offered for approval, and a hit is refused the same way a perimeter breach is:
+
+```
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  BLOCKED BY CREDENTIAL TRIPWIRE
+  Denied automatically. No approval was offered.
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  create_or_update_file
+        found      GitHub personal access token in fixture/src/client.js:14 — ghp_****** (44 chars)
+```
+
+The rules are narrow on purpose — issuer prefixes, private key blocks, JWTs, and hardcoded assignments whose value doesn't look like a placeholder. A scanner that fires on every long string is a scanner people turn off. `LTP_SECRET_POLICY=warn` downgrades it to a red line on the approval prompt; `off` disables it. The default is to refuse, because a credential is not something a tired operator should have the option to wave through, and the cost of a false positive is one word in a config file.
+
+Note what the denial does *not* contain: the secret. A leak report that quotes the leak has moved it somewhere new.
+
+## The decision journal
+
+An approval gate is only as good as what it can prove afterwards. "The agent asked, someone said yes" is the single most important fact about an incident — and until it is written down, it lives in terminal scrollback that scrolls away.
+
+Every decision is appended to `runs/<session>.jsonl` as it happens, and each record carries the hash of the record before it:
+
+```bash
+npm run journal -- runs/sess_01J8Z.jsonl
+
+#  WHEN     TOOL                   PATHS                OUTCOME            OPERATOR
+1  4m ago   create_branch          —                    approved           ada@oncall-1
+2  4m ago   create_or_update_file  fixture/src/cart.js  approved           ada@oncall-1
+3  3m ago   create_or_update_file  src/agent/spec.ts    blocked-perimeter  ada@oncall-1
+
+  CHAIN VERIFIED 3 record(s)
+  digest  sha256:f0e3b789…
+```
+
+Edit a line and the chain stops verifying; delete one and the record after it no longer points at anything. The run prints the same digest when it finishes, so a dropped tail is detectable too — paste it into the incident ticket and the file can be checked against it later by anyone.
+
+It also records the outcomes a transcript flattens together. `denied` (a human said no), `denied-no-tty` (nobody was there), `blocked-perimeter` and `blocked-secret` (nobody was asked) are four different facts about a run, and only the first one means a person reviewed it.
+
+This is a local audit trail, not a signed one: it proves the file has not been quietly edited, not who ran it. Journals are git-ignored — an audit trail belongs to the machine that made the decisions.
+
+## Rehearsal
+
+```bash
+npm run dispatch -- --rehearse PROJECT-4A2
+```
+
+The whole run, with every repository write refused by policy. The agent is told it is a rehearsal, works the incident to the end anyway, and reports exactly what it would have pushed; the perimeter and the tripwire still report what *they* would have caught. It is how you point this at an unfamiliar repository for the first time, and how CI can exercise the full path without a standing offer to write to anything.
 
 ## What TrueForge is doing here
 
@@ -144,10 +223,19 @@ npm run doctor            # pre-flight: node version, server, agent
 npm run provision         # creates the agent from src/agent/spec.ts
 
 # 4. Dispatch an incident
+npm run dispatch -- --rehearse PROJECT-4A2   # first time: refuse every write
 npm run dispatch -- PROJECT-4A2
 ```
 
-`npm run doctor` exists because the worst time to discover an unauthorized connector is halfway through a demo.
+`npm run doctor` exists because the worst time to discover an unauthorized connector is halfway through a demo. It also compares the agent *on the server* against the spec in this repository, and refuses to call the run green if the two have drifted — someone editing the agent in the TrueForge UI to unstick a demo should not be able to remove the approval gate while the repo still claims it is there.
+
+| Command | |
+| --- | --- |
+| `npm run doctor` | pre-flight: node, server, agent, gate drift, perimeter |
+| `npm run provision` | make the server match `src/agent/spec.ts` |
+| `npm run dispatch -- <id>` | run one incident, `--rehearse` to refuse all writes |
+| `npm run perimeter -- <paths…>` | ask the boundary what it would do |
+| `npm run journal -- <file>` | verify and print a run's decision record |
 
 ## Repository layout
 
@@ -160,14 +248,21 @@ src/
   runtime/run.ts       stream a turn, collect pauses, resume until settled
   runtime/approvals.ts the human gate; fails closed without a TTY
   runtime/perimeter.ts the write perimeter; denies before a human is asked
+  runtime/secrets.ts   the credential tripwire; what may be written, not where
+  runtime/journal.ts   the tamper-evident record of what was decided
   runtime/render.ts    terminal rendering, and what a write actually touches
   cli/provision.ts     create/update the saved agent from the spec
   cli/dispatch.ts      run one incident end to end
-  cli/doctor.ts        pre-flight checks
+  cli/doctor.ts        pre-flight checks, including gate drift and perimeter sanity
+  cli/perimeter.ts     judge paths against the perimeter; assertable in CI
+  cli/journal.ts       verify a decision journal's hash chain
 fixture/               the service under repair — the only place the agent may write
+runs/                  decision journals (git-ignored)
 docs/
   ARCHITECTURE.md      how the pieces fit, and why the gate sits where it does
   DEMO.md              the three-minute demo script
+SECURITY.md            threat model: what these controls do and do not cover
+CONTRIBUTING.md        how to work on this, and the rule about the control plane
 ```
 
 The agent lives in **one reviewable file**. `src/agent/spec.ts` is the entire definition — instructions, tool filters, approval policy, sandbox, context management. Nothing is hand-clicked in a UI and lost; `npm run provision` makes the server match the repo.
@@ -180,10 +275,14 @@ Every substantive change lands through a pull request reviewed by **[Qodo](https
 
 ## Safety and scope
 
-- The agent only ever writes to the single repository named in `LTP_TARGET_REPO`.
+- The agent only ever writes to the single repository named in `LTP_TARGET_REPO`, and only to paths inside `LTP_WRITE_PATHS`.
 - Sentry is attached read-only (`enableTools: ['@read-only']`) — incidents are read, never mutated.
 - Credentials live in TrueForge connectors. This repository contains no tokens, and `.env` is git-ignored.
+- Payloads are scanned for credentials before they are offered for approval, and refused by default.
+- Every decision is journalled, and the journal is tamper-evident.
 - One PR per incident, always branched off the base branch, never pushed to it.
+
+The threat model — including what these controls deliberately do *not* cover — is written out in [SECURITY.md](SECURITY.md).
 
 ## License
 

@@ -163,6 +163,37 @@ export function pathsIn(args: Record<string, unknown>): string[] {
 }
 
 /**
+ * Every piece of text a tool call would put into the repository, labelled by
+ * where it would land.
+ *
+ * `summarizeCall` shows a reviewer one body, because a terminal has a finite
+ * height. The tripwire has to look at all of them - the credential is never in
+ * the file you happened to display.
+ */
+export function payloadsIn(args: Record<string, unknown>): Array<{ label: string; text: string }> {
+  const payloads: Array<{ label: string; text: string }> = [];
+
+  const push = (label: string, value: unknown): void => {
+    const text = str(value);
+    if (text) payloads.push({ label, text });
+  };
+
+  push(str(args.path) ?? 'content', args.content);
+
+  if (Array.isArray(args.files)) {
+    for (const file of args.files) {
+      const entry = file as Record<string, unknown>;
+      push(str(entry?.path) ?? 'file', entry?.content);
+    }
+  }
+
+  push('body', args.body);
+  push('message', args.message ?? args.commit_message);
+
+  return payloads;
+}
+
+/**
  * Turn a raw tool call into something a human can approve on sight.
  *
  * The gate is the whole safety argument of this project, and an operator who

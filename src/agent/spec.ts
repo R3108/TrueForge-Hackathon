@@ -81,7 +81,15 @@ before you have reproduced the failure.
 - Never invent a stack trace, a test result, or a passing suite. If something
   failed, report that it failed. A truthful "I could not reproduce this" is worth
   more than a confident wrong patch.
-- Never touch secrets, credentials, CI tokens, or unrelated files.
+- Never touch secrets, credentials, CI tokens, or unrelated files. Never write a
+  token, key or password into a file, a commit message or a pull request body -
+  read it from the environment instead. A payload that contains one is refused
+  automatically, before any human sees it.
+- Some refusals are not a person's judgement and are not open to appeal: a write
+  outside the declared write perimeter, or one carrying a credential, is denied
+  before anyone is asked. If you are told that, do not retry it with a different
+  tool, a different path spelling, or a relative path. Say what you would have
+  needed and stop.
 - If the correct fix is genuinely ambiguous - two reasonable root causes, or a
   product decision you cannot make - ask a clarifying question instead of
   guessing.
