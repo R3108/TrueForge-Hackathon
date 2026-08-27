@@ -28,10 +28,21 @@ async function main(): Promise<void> {
 
   banner('LICENCE TO PATCH', `incident: ${incident}`);
 
+  console.log(`  target repo      ${style.bold(config.targetRepo)}`);
+  console.log(
+    `  write perimeter  ${
+      config.writePaths.length > 0
+        ? style.green(config.writePaths.join(', '))
+        : style.yellow('none declared - only the human gate applies')
+    }`,
+  );
+
+  // Reference the saved agent by name. `Session.title` is server-owned - the
+  // create and update endpoints both reject it - so the incident id travels in
+  // the brief instead.
   const { data: session } = await client.sessions.create({
     agent: { name: AGENT_NAME },
-    title: `Incident ${incident}`,
-  } as never);
+  });
 
   console.log(style.dim(`session ${session.id}`));
   console.log(style.dim(`watch live: ${config.baseUrl}/sessions/${session.id}\n`));
@@ -48,7 +59,7 @@ async function main(): Promise<void> {
     `will approve or deny each write.`,
   ].join('\n');
 
-  const { turns } = await runIncident(client, session.id, brief);
+  const { turns } = await runIncident(client, session.id, brief, config.writePaths);
 
   console.log(`\n${style.green('Incident closed')} ${style.dim(`(${turns} turns)`)}`);
   console.log(style.dim(`Full trace: ${config.baseUrl}/sessions/${session.id}\n`));

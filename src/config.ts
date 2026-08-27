@@ -13,6 +13,11 @@ export interface Config {
   model: string;
   targetRepo: string;
   baseBranch: string;
+  /**
+   * Glob allowlist of paths the agent may write to inside `targetRepo`.
+   * Empty means no perimeter is declared, and only the human gate applies.
+   */
+  writePaths: string[];
   connectors: {
     sentry: string;
     github: string;
@@ -37,9 +42,13 @@ export function loadConfig(): Config {
   return {
     baseUrl: env('TRUEFORGE_BASE_URL', 'http://localhost:8790'),
     token: process.env.TRUEFORGE_TOKEN?.trim() || undefined,
-    model: env('LTP_MODEL', 'openai/gpt-5.2'),
+    model: env('LTP_MODEL', 'openai/gpt-5-6-terra'),
     targetRepo,
     baseBranch: env('LTP_BASE_BRANCH', 'main'),
+    writePaths: (process.env.LTP_WRITE_PATHS ?? '')
+      .split(',')
+      .map((pattern) => pattern.trim())
+      .filter(Boolean),
     connectors: {
       sentry: env('LTP_CONNECTOR_SENTRY', 'sentry'),
       github: env('LTP_CONNECTOR_GITHUB', 'github'),

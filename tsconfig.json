@@ -2,6 +2,10 @@
   "compilerOptions": {
     "target": "ES2023",
     "lib": ["ES2023"],
+    // Node-only project: `console`, `process` and `fetch` are Node globals, not
+    // DOM ones. Naming the package explicitly keeps an unrelated transitive
+    // `@types/*` package from silently landing in the global scope later.
+    "types": ["node"],
     "module": "NodeNext",
     "moduleResolution": "NodeNext",
     "rootDir": "src",
