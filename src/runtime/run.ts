@@ -1,6 +1,6 @@
-import type { TrueForge } from '@truefoundry/trueforge-sdk';
-import { style, preview } from './render.ts';
-import { requestClearance, type Decision, type PendingCall } from './approvals.ts';
+import type { TrueForge, TrueForgeApi } from '@truefoundry/trueforge-sdk';
+import { style, preview, summarizeInline } from './render.ts';
+import { requestClearance, type PendingCall } from './approvals.ts';
 
 /**
  * Anything the harness streams. The SDK ships precise per-event types, but the
@@ -15,7 +15,7 @@ interface StreamEvent {
   [key: string]: unknown;
 }
 
-type TurnInput = { type: 'user.message'; content: string } | Decision;
+type TurnInput = TrueForgeApi.TurnInputItem;
 
 const MAX_RESUMES = 40;
 
@@ -31,6 +31,7 @@ export async function runIncident(
   client: TrueForge,
   sessionId: string,
   brief: string,
+  writePaths: string[] = [],
 ): Promise<{ turns: number; finalOutput: string }> {
   let input: TurnInput[] = [{ type: 'user.message', content: brief }];
   let turns = 0;
@@ -46,7 +47,7 @@ export async function runIncident(
       return { turns, finalOutput };
     }
 
-    const decisions = await requestClearance(pending);
+    const decisions = await requestClearance(pending, writePaths);
     input = decisions;
   }
 
@@ -60,7 +61,7 @@ async function streamTurn(
   sessionId: string,
   input: TurnInput[],
 ): Promise<{ pending: PendingCall[]; output: string; status: string }> {
-  const stream = await client.sessions.createTurnStream(sessionId, { input: input as never });
+  const stream = await client.sessions.createTurnStream(sessionId, { input });
 
   /** model.message events by id, so an approval can name the tool it belongs to. */
   const eventsById = new Map<string, StreamEvent>();
@@ -87,18 +88,25 @@ async function streamTurn(
         console.log(style.dim(`\n· turn started`));
         break;
 
-      case 'mcp.initialize':
-        console.log(style.dim(`· connected to ${String(event.server_name ?? 'an MCP server')}`));
+      case 'mcp.initialize': {
+        const names = mcpServersOf(event).map(labelOf);
+        console.log(style.dim(`· connected to ${names.join(', ') || 'an MCP server'}`));
         break;
+      }
 
-      case 'mcp.auth_required':
+      case 'mcp.auth_required': {
         endText();
-        console.log(
-          style.yellow(
-            `· connector ${String(event.server_name ?? '')} needs authorization - open the TrueForge chat UI to connect it`,
-          ),
-        );
+        const servers = mcpServersOf(event);
+        if (servers.length === 0) {
+          console.log(style.yellow('· a connector needs authorization'));
+        }
+        for (const server of servers) {
+          console.log(style.yellow(`· connector ${style.bold(labelOf(server))} needs authorization`));
+          const url = server.auth_url ?? server.authUrl;
+          if (url) console.log(style.yellow(`  authorize: ${url}`));
+        }
         break;
+      }
 
       case 'thread.created': {
         const id = String(event.id ?? event.thread_id ?? '');
@@ -123,7 +131,7 @@ async function streamTurn(
         const call = toolCallOf(event);
         if (call) {
           endText();
-          console.log(`${style.cyan('· tool')} ${style.bold(call.name)}`);
+          console.log(`${style.cyan('· tool')} ${summarizeInline(call.name, call.args)}`);
         }
         break;
       }
@@ -172,6 +180,27 @@ async function streamTurn(
 
 function sameCall(a: StreamEvent, b: StreamEvent): boolean {
   return callId(a) !== undefined && callId(a) === callId(b);
+}
+
+interface McpServerRef {
+  name?: string;
+  id?: string;
+  auth_url?: string;
+  authUrl?: string;
+}
+
+/**
+ * `mcp.*` events carry an `mcp_servers` array - `[{ id, name, auth_url }]` - not
+ * a scalar server name. The `auth_url` is the whole point of an auth_required
+ * event: it is the link that unblocks the connector.
+ */
+function mcpServersOf(event: StreamEvent): McpServerRef[] {
+  const servers = event.mcp_servers ?? event.mcpServers;
+  return Array.isArray(servers) ? (servers as McpServerRef[]) : [];
+}
+
+function labelOf(server: McpServerRef): string {
+  return server.name ?? server.id ?? '(unnamed)';
 }
 
 function callId(event: StreamEvent): string | undefined {

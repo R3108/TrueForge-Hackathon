@@ -47,11 +47,10 @@ async function main(): Promise<void> {
     {
       label: `Agent "${AGENT_NAME}" provisioned`,
       run: async () => {
-        const agents = client.agents as unknown as { list: () => Promise<{ data: unknown }> };
-        const { data } = await agents.list();
-        const items = Array.isArray(data) ? data : ((data as { items?: unknown[] })?.items ?? []);
-        const found = (items as Array<{ name?: string }>).some((a) => a?.name === AGENT_NAME);
-        if (!found) throw new Error('not found - run: npm run provision');
+        const { data } = await client.agents.list();
+        if (!data.some((agent) => agent.name === AGENT_NAME)) {
+          throw new Error('not found - run: npm run provision');
+        }
         return 'found';
       },
     },

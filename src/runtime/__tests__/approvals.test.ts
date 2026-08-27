@@ -67,6 +67,41 @@ describe('requestClearance', () => {
     );
   });
 
+  test('denies a write outside the perimeter without asking a human', async () => {
+    // A TTY is present, so the only reason this can be denied is the perimeter.
+    stdin.isTTY = true;
+
+    const decisions = await requestClearance(
+      [call({ toolName: 'create_or_update_file', args: { path: 'src/agent/spec.ts' } })],
+      ['fixture/**'],
+    );
+
+    assert.equal(decisions.length, 1);
+    assert.equal(decisions[0]?.approval.status, 'deny');
+    assert.match(
+      (decisions[0]?.approval as { reason: string }).reason,
+      /perimeter/i,
+      'the agent should be told which boundary it hit',
+    );
+  });
+
+  test('does not let a perimeter breach ride along with a legitimate write', async () => {
+    stdin.isTTY = false;
+
+    const decisions = await requestClearance(
+      [
+        call({ toolCallId: 'inside', args: { path: 'fixture/src/cart.js' } }),
+        call({ toolCallId: 'outside', args: { path: 'src/runtime/approvals.ts' } }),
+      ],
+      ['fixture/**'],
+    );
+
+    assert.equal(decisions.length, 2, 'every call must still be answered');
+    for (const decision of decisions) {
+      assert.equal(decision.approval.status, 'deny');
+    }
+  });
+
   test('answers each pending call with its own id, not a shared one', async () => {
     stdin.isTTY = false;
 
@@ -76,7 +111,7 @@ describe('requestClearance', () => {
     ]);
 
     assert.deepEqual(
-      decisions.map((d) => [d.tool_call_id, d.thread_id]),
+      decisions.map((d) => [d.toolCallId, d.threadId]),
       [
         ['call_a', 'main'],
         ['call_b', 'sub_7f2a'],
