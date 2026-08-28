@@ -128,9 +128,11 @@ async function streamTurn(
       }
 
       case 'model.message': {
-        const call = toolCallOf(event);
-        if (call) {
-          endText();
+        // Every call in the message, not just the first - a message that asks
+        // for three writes should print three lines.
+        const calls = allToolCalls(event);
+        if (calls.length > 0) endText();
+        for (const call of calls) {
           console.log(`${style.cyan('· tool')} ${summarizeInline(call.name, call.args)}`);
         }
         break;
@@ -212,38 +214,90 @@ function callId(event: StreamEvent): string | undefined {
  * Turn a pause event into something worth showing a human: the pause itself only
  * carries ids, so the tool's name and arguments come from the `model.message`
  * that requested it.
+ *
+ * One model message can carry several tool calls, and each gets its own pause.
+ * The call is therefore looked up **by `tool_call_id`** - taking the first call
+ * in the message would let an in-perimeter path be checked and displayed while
+ * the approval is routed to a different, unchecked write. That is not a display
+ * bug: it defeats the perimeter, the tripwire, and the operator all at once.
+ *
+ * When the id cannot be matched, the call is marked unresolved rather than
+ * guessed at. Nothing downstream can inspect arguments it does not have, so the
+ * gate refuses it.
  */
 function resolvePending(event: StreamEvent, index: Map<string, StreamEvent>): PendingCall {
   const sourceId = event.source_event_id ?? event.sourceEventId;
   const source = typeof sourceId === 'string' ? index.get(sourceId) : undefined;
-  const call = source ? toolCallOf(source) : undefined;
+  const wantedId = callId(event);
+  const call = source && wantedId ? toolCallOf(source, wantedId) : undefined;
+
+  // `arguments` on the pause event itself is authoritative when present.
+  const inlineArgs = parseArgs(event.arguments);
+  const args = call?.args ?? inlineArgs;
 
   return {
     threadId: String(event.thread_id ?? 'main'),
-    toolCallId: callId(event) ?? '',
-    toolName: call?.name ?? 'unknown tool',
-    args: call?.args ?? event.arguments ?? {},
+    toolCallId: wantedId ?? '',
+    toolName: call?.name ?? str(event.tool_name) ?? 'unknown tool',
+    args: args ?? {},
+    resolved: call !== undefined || inlineArgs !== undefined,
   };
 }
 
-/** Pull the first tool call out of a model.message, tolerating shape drift. */
-function toolCallOf(event: StreamEvent): { name: string; args: unknown } | undefined {
-  const calls = event.tool_calls ?? event.toolCalls;
-  if (!Array.isArray(calls) || calls.length === 0) return undefined;
+function str(value: unknown): string | undefined {
+  return typeof value === 'string' && value.trim() ? value : undefined;
+}
 
-  const first = calls[0] as Record<string, unknown>;
-  const fn = (first.function ?? first) as Record<string, unknown>;
+/** Tool-call ids live in different places across shapes; check all of them. */
+function idOfCall(call: Record<string, unknown>): string | undefined {
+  const id = call.id ?? call.tool_call_id ?? call.toolCallId;
+  return typeof id === 'string' ? id : undefined;
+}
+
+function parseArgs(raw: unknown): unknown {
+  if (raw === undefined || raw === null) return undefined;
+  if (typeof raw !== 'string') return raw;
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return raw;
+  }
+}
+
+/**
+ * Pull one specific tool call out of a model.message, tolerating shape drift.
+ *
+ * Deliberately returns undefined when `wantedId` matches nothing: a fallback to
+ * "some other call in the same message" is exactly the confusion this exists to
+ * prevent.
+ */
+function toolCallOf(
+  event: StreamEvent,
+  wantedId: string,
+): { name: string; args: unknown } | undefined {
+  const calls = event.tool_calls ?? event.toolCalls;
+  if (!Array.isArray(calls)) return undefined;
+
+  const match = (calls as Array<Record<string, unknown>>).find(
+    (call) => idOfCall(call) === wantedId,
+  );
+  return match ? readCall(match) : undefined;
+}
+
+/** Every tool call in a model.message, in order, for live rendering. */
+function allToolCalls(event: StreamEvent): Array<{ name: string; args: unknown }> {
+  const calls = event.tool_calls ?? event.toolCalls;
+  if (!Array.isArray(calls)) return [];
+
+  return (calls as Array<Record<string, unknown>>)
+    .map(readCall)
+    .filter((call): call is { name: string; args: unknown } => call !== undefined);
+}
+
+function readCall(call: Record<string, unknown>): { name: string; args: unknown } | undefined {
+  const fn = (call.function ?? call) as Record<string, unknown>;
   const name = fn.name;
   if (typeof name !== 'string') return undefined;
 
-  const rawArgs = fn.arguments ?? fn.args;
-  let args: unknown = rawArgs;
-  if (typeof rawArgs === 'string') {
-    try {
-      args = JSON.parse(rawArgs);
-    } catch {
-      args = rawArgs;
-    }
-  }
-  return { name, args };
+  return { name, args: parseArgs(fn.arguments ?? fn.args) };
 }

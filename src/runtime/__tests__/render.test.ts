@@ -75,12 +75,12 @@ describe('summarizeCall', () => {
   });
 
   test('surfaces the file content as the reviewable body', () => {
-    const { body } = summarizeCall('create_or_update_file', {
+    const { bodies } = summarizeCall('create_or_update_file', {
       path: 'src/cart.ts',
       content: 'line one\nline two',
     });
 
-    assert.equal(body?.text, 'line one\nline two');
+    assert.equal(bodies[0]?.text, 'line one\nline two');
   });
 
   test('flags a write that touches CI configuration', () => {
@@ -154,11 +154,19 @@ describe('payloadsIn', () => {
       message: 'fix: guard against a missing cart',
     }).map((payload) => payload.label);
 
-    assert.deepEqual(labels, ['body', 'message']);
+    // Titles are persisted exactly like bodies. Omitting them left a place to
+    // put a token that the tripwire would never look at.
+    assert.deepEqual(labels, ['body', 'message', 'title']);
   });
 
-  test('returns nothing for a call that writes no text', () => {
-    assert.deepEqual(payloadsIn({ branch: 'fix/x', base: 'main' }), []);
+  test('includes the branch name, which is also written to the repository', () => {
+    assert.deepEqual(payloadsIn({ branch: 'fix/x', base: 'main' }), [
+      { label: 'branch', text: 'fix/x' },
+    ]);
+  });
+
+  test('returns nothing for a call that writes no text at all', () => {
+    assert.deepEqual(payloadsIn({ base: 'main', owner: 'R3108', repo: 'x' }), []);
   });
 });
 

@@ -124,6 +124,9 @@ const SENSITIVE: Array<{ test: RegExp; note: string }> = [
   { test: /secret|credential|token|password/i, note: 'path looks credential-related' },
 ];
 
+const EMPTY_NOTE = '(empty — this erases the file)';
+const EMPTY_RISK = 'writes empty content over an existing path';
+
 /** Tools whose blast radius is bigger than "one file on a branch". */
 const DESTRUCTIVE: Record<string, string> = {
   delete_file: 'deletes a file',
@@ -135,8 +138,14 @@ const DESTRUCTIVE: Record<string, string> = {
 export interface CallSummary {
   /** Aligned label/value pairs: the "what and where" of the call. */
   fields: Array<[string, string]>;
-  /** The payload a reviewer actually has to read - file content, PR body. */
-  body?: { label: string; text: string };
+  /**
+   * Every payload a reviewer has to read, in order.
+   *
+   * One approval on `push_files` authorises every file in it, so showing only
+   * the first was not a shortcut - it was an operator approving writes they had
+   * never seen.
+   */
+  bodies: Array<{ label: string; text: string }>;
   /** Reasons to look twice, shown in yellow above the prompt. */
   risks: string[];
 }
@@ -189,6 +198,10 @@ export function payloadsIn(args: Record<string, unknown>): Array<{ label: string
 
   push('body', args.body);
   push('message', args.message ?? args.commit_message);
+  // Titles are persisted in the repository exactly like bodies are - a PR or
+  // issue title is as good a place to leak a token as the diff is.
+  push('title', args.title);
+  push('branch', args.branch ?? args.head);
 
   return payloads;
 }
@@ -204,7 +217,24 @@ export function summarizeCall(toolName: string, rawArgs: unknown): CallSummary {
   const args = (rawArgs ?? {}) as Record<string, unknown>;
   const fields: Array<[string, string]> = [];
   const risks: string[] = [];
-  let body: CallSummary['body'];
+  const bodies: CallSummary['bodies'] = [];
+
+  /**
+   * Add a payload if the call actually carries one.
+   *
+   * An empty string is a payload: writing `""` to a path erases the file. It has
+   * to be shown as such, because a summary that silently omits it looks
+   * identical to one that changes nothing.
+   */
+  const addBody = (label: string, value: unknown): void => {
+    if (typeof value !== 'string') return;
+    if (value.trim() === '') {
+      bodies.push({ label: `${label} ${EMPTY_NOTE}`, text: '' });
+      if (!risks.includes(EMPTY_RISK)) risks.push(EMPTY_RISK);
+      return;
+    }
+    bodies.push({ label, text: value });
+  };
 
   const add = (label: string, value: unknown): void => {
     const text = str(value);
@@ -226,16 +256,14 @@ export function summarizeCall(toolName: string, rawArgs: unknown): CallSummary {
     const paths = pathsIn(args).join(', ');
     fields.push(['files', `${args.files.length} · ${paths}`]);
 
-    const first = args.files[0] as Record<string, unknown>;
-    const content = str(first?.content);
-    if (content) body = { label: `content of ${str(first?.path) ?? 'first file'}`, text: content };
+    // Every file, not just the first: one "y" authorises all of them.
+    for (const [index, file] of (args.files as Array<Record<string, unknown>>).entries()) {
+      addBody(`content of ${str(file?.path) ?? `file ${index + 1}`}`, file?.content);
+    }
   }
 
-  const content = str(args.content);
-  if (content) body = { label: 'content', text: content };
-
-  const prose = str(args.body);
-  if (prose && !body) body = { label: 'body', text: prose };
+  addBody(str(args.path) ? `content of ${str(args.path)}` : 'content', args.content);
+  addBody('body', args.body);
 
   for (const path of pathsIn(args)) {
     for (const rule of SENSITIVE) {
@@ -246,7 +274,7 @@ export function summarizeCall(toolName: string, rawArgs: unknown): CallSummary {
   const destructive = DESTRUCTIVE[toolName];
   if (destructive) risks.push(destructive);
 
-  return { fields, body, risks };
+  return { fields, bodies, risks };
 }
 
 /** The aligned label/value block used under a tool name. */

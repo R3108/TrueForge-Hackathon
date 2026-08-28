@@ -33,6 +33,8 @@ export type Outcome =
   | 'denied-interrupt'
   /** Rehearsal run: writes are refused by policy, not by judgement. */
   | 'denied-rehearsal'
+  /** The paused call could not be tied to its arguments, so nothing could check it. */
+  | 'blocked-unresolved'
   /** Outside the declared write perimeter. No approval was offered. */
   | 'blocked-perimeter'
   /** The payload carried something that looked like a credential. */
@@ -86,6 +88,8 @@ export class Journal {
   #incident: string;
   #operator: string;
   #writable: boolean;
+  /** Decisions in the chain that never reached the file. */
+  #unpersisted = 0;
 
   constructor(options: JournalOptions) {
     this.runId = options.runId ?? randomUUID();
@@ -111,8 +115,13 @@ export class Journal {
     };
 
     const entry: JournalEntry = { ...body, hash: digestOf(body) };
-    this.#entries.push(entry);
+
+    // Append first. The digest this class advertises is a claim about what is on
+    // disk, so an entry that failed to persist must not enter the chain - a
+    // digest covering unwritten decisions cannot be checked against the file and
+    // is worse than no digest at all.
     this.#append(entry);
+    this.#entries.push(entry);
     return entry;
   }
 
@@ -179,16 +188,38 @@ export class Journal {
    * a failed incident. The first write failure disables the file and says so.
    */
   #append(entry: JournalEntry): void {
-    if (!this.#writable || !this.file) return;
+    if (!this.file) return;
+    if (!this.#writable) {
+      this.#unpersisted++;
+      return;
+    }
     try {
       mkdirSync(dirname(this.file), { recursive: true });
       appendFileSync(this.file, `${JSON.stringify(entry)}\n`, 'utf8');
     } catch (error) {
       this.#writable = false;
+      this.#unpersisted++;
       console.error(
         `  (journal disabled: ${error instanceof Error ? error.message : String(error)})`,
       );
     }
+  }
+
+  /**
+   * Is the digest a claim anyone can check?
+   *
+   * Only when every recorded decision reached the file. A digest computed over
+   * entries that were never written cannot be verified against the journal, so
+   * presenting it as an audit trail would be a lie told precisely when the audit
+   * trail matters. Callers print the digest differently when this is false.
+   */
+  get persisted(): boolean {
+    return this.#unpersisted === 0;
+  }
+
+  /** How many decisions are in the chain but not on disk. */
+  get unpersisted(): number {
+    return this.#unpersisted;
   }
 }
 
