@@ -117,7 +117,7 @@ npm run provision   # creates the agent on the server from src/agent/spec.ts
 npm run doctor      # pre-flight
 ```
 
-**Do not proceed until `doctor` is all green.** It checks the Node version, that the server is up, that the agent exists, that the connectors are authorized, that Sentry is read-only, and that the live agent's gate still matches the repo. Every red line here becomes a problem on camera.
+**Do not proceed until `doctor` is all green.** It checks the Node version, that the server is up, that the agent exists, that both connectors exist and are actually authorized (not just attached), that Sentry is read-only, that the perimeter keeps the target's CI and dependency manifests out of the agent's reach, and that the live agent's gate still matches the repo. Every red line here becomes a problem on camera.
 
 ### 1.7 Rehearse
 
@@ -247,9 +247,4 @@ Don't forget the free tracks — **Field Report** (blog post) and **Radio Traffi
 | Every write is denied without asking | You're in `--rehearse`, or there's no TTY. Drop the flag; run in a real terminal. |
 | Blocked by write perimeter | The agent tried to write outside `src/**`. Check with `npm run perimeter -- <path>`. |
 | Run hangs after the answer | Fixed in #5. Make sure you're on latest `main`. |
-
----
-
-## Known follow-up
-
-`fixture/` still exists in this repository as a leftover copy of the service. The live target is [`R3108/cart-service`](https://github.com/R3108/cart-service) — that is what the agent reads and patches, and what you clone in step 1.4. Deleting the stale copy needs a token with the `workflow` scope because it also updates CI; it changes nothing about how the demo runs.
+| `doctor` FAILs "Connectors authorized" | One of the two connectors is missing or awaiting authorization. Reconnect it in Settings → Connectors; the run would otherwise die with `mcp.auth_required`. |

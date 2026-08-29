@@ -290,11 +290,11 @@ npm run dispatch -- --rehearse PROJECT-4A2   # first time: refuse every write
 npm run dispatch -- PROJECT-4A2
 ```
 
-`npm run doctor` exists because the worst time to discover an unauthorized connector is halfway through a demo. It also compares the agent *on the server* against the spec in this repository, and refuses to call the run green if the two have drifted — someone editing the agent in the TrueForge UI to unstick a demo should not be able to remove the approval gate while the repo still claims it is there.
+`npm run doctor` exists because the worst time to discover an unauthorized connector is halfway through a demo — so it verifies both connectors are actually *authorized* (not merely attached), via the server's settings projection. It also compares the agent *on the server* against the spec in this repository, and refuses to call the run green if the two have drifted — someone editing the agent in the TrueForge UI to unstick a demo should not be able to remove the approval gate while the repo still claims it is there.
 
 | Command | |
 | --- | --- |
-| `npm run doctor` | pre-flight: node, server, agent, gate drift, perimeter |
+| `npm run doctor` | pre-flight: node, server, agent, gate drift, connector authorization, perimeter |
 | `npm run provision` | make the server match `src/agent/spec.ts` |
 | `npm run dispatch -- <id>` | run one incident, `--rehearse` to refuse all writes |
 | `npm run perimeter -- <paths…>` | ask the boundary what it would do |
@@ -316,7 +316,7 @@ src/
   runtime/render.ts    terminal rendering, and what a write actually touches
   cli/provision.ts     create/update the saved agent from the spec
   cli/dispatch.ts      run one incident end to end
-  cli/doctor.ts        pre-flight checks, including gate drift and perimeter sanity
+  cli/doctor.ts        pre-flight checks: gate drift, connector authorization, perimeter
   cli/perimeter.ts     judge paths against the perimeter; assertable in CI
   cli/journal.ts       verify a decision journal's hash chain
 docs/RUNBOOK.md        end-to-end setup, and the demo hand-off
