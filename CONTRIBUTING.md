@@ -33,9 +33,9 @@ Widening a boundary is a separate pull request from anything else. A perimeter c
 
 ## The rest
 
-`src/cli/`, `src/runtime/render.ts`, `docs/`, and `fixture/` are ordinary code. Normal care, no ceremony.
+`src/cli/`, `src/runtime/render.ts`, and `docs/` are ordinary code. Normal care, no ceremony.
 
-`fixture/` is the service the agent repairs. It is meant to contain a realistic bug — please don't fix it.
+[`R3108/cart-service`](https://github.com/R3108/cart-service) is the service the agent repairs, in a separate repository so the agent can never reach this one. It is meant to contain a realistic bug — please don't fix it.
 
 ## Style
 
@@ -48,6 +48,6 @@ Two conventions worth keeping:
 
 ## Pull requests
 
-Every change lands through a pull request reviewed by [Qodo](https://www.qodo.ai/); no direct commits to `main`. CI runs typecheck, tests, the perimeter assertions, and the fixture's own suite. All four must be green.
+Every change lands through a pull request reviewed by [Qodo](https://www.qodo.ai/); no direct commits to `main`. CI runs typecheck, tests, the perimeter assertions, and a check that the harness still refuses to target itself. All four must be green.
 
 If your change touches the perimeter, add the paths you care about to the `--expect-blocked` / `--expect-allowed` lists in `.github/workflows/ci.yml`. That file is where this project writes down what it promises.

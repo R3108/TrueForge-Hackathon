@@ -80,12 +80,16 @@ Reads run free. Writes stop dead. Three properties follow:
 
 There is a hole in the design above, and closing it is the second half of this project.
 
-`LTP_TARGET_REPO` is **repo-granular**. Once the agent may write to a repository, the harness will let it write anywhere in that repository. The service it repairs, [`fixture/`](fixture/), lives in this same repository — so without a further control, the agent could open a pull request that edits `src/agent/spec.ts` and removes its own approval gate. A tired operator at 3am would see a normal-looking approval prompt.
+`LTP_TARGET_REPO` is **repo-granular**. Once the agent may write to a repository, the harness will let it write anywhere in that repository.
+
+So the service it repairs — [**R3108/cart-service**](https://github.com/R3108/cart-service) — is a *different repository from this one*. The agent's GitHub scope simply does not contain its own approval gate, which makes "it cannot disarm itself" a fact about credentials rather than a promise about glob matching. Pointing `LTP_TARGET_REPO` at this harness is refused at startup, and CI asserts that the refusal still works.
+
+Inside the target, the perimeter is the second layer: the agent owns the service's source, but not the CI that verifies its patch.
 
 So the boundary is declared in code:
 
 ```
-LTP_WRITE_PATHS=fixture/**
+LTP_WRITE_PATHS=src/**
 ```
 
 Any write touching a path outside the perimeter is **denied before a human is asked**. Not shown in red, not prompted with a warning — never offered:
@@ -98,24 +102,24 @@ Any write touching a path outside the perimeter is **denied before a human is as
 
   create_or_update_file
         outside    src/agent/spec.ts
-        perimeter  fixture/**
+        perimeter  src/**
 ```
 
-The agent receives the denial and the reason, and can explain what it would need — it simply cannot get there. Path traversal is resolved before matching, so `fixture/../src/agent/spec.ts` is outside the perimeter too; a boundary you can walk out of with `../` is not a boundary. A multi-file push is rejected whole if any single file escapes.
+The agent receives the denial and the reason, and can explain what it would need — it simply cannot get there. Path traversal is resolved before matching, so `src/../.github/workflows/ci.yml` is outside the perimeter too; a boundary you can walk out of with `../` is not a boundary. A multi-file push is rejected whole if any single file escapes.
 
-A grant alone is still too coarse. `fixture/**` is the right thing to hand an agent repairing that service, but nothing inside it should let the agent rewrite the CI workflow that *checks* its patch. So a `!` pattern carves an exception out of a grant, and exceptions win:
+A grant alone is still too coarse. `src/**` is the right thing to hand an agent repairing that service, but nothing inside it should let the agent rewrite the CI workflow that *checks* its patch. So a `!` pattern carves an exception out of a grant, and exceptions win:
 
 ```
-LTP_WRITE_PATHS=fixture/**,!fixture/.github/**
+LTP_WRITE_PATHS=src/**,!.github/**,!package.json
 ```
 
 **You can ask the boundary what it would do, without running the agent:**
 
 ```bash
-npm run perimeter -- fixture/src/cart.js fixture/.github/workflows/ci.yml src/agent/spec.ts
+npm run perimeter -- src/cart.js .github/workflows/ci.yml package.json
 
-ALLOW  fixture/src/cart.js               matches fixture/**
-BLOCK  fixture/.github/workflows/ci.yml  excluded by !fixture/.github/**
+ALLOW  src/cart.js                       matches src/**
+BLOCK  .github/workflows/ci.yml          excluded by !.github/**
 BLOCK  src/agent/spec.ts                 outside every grant
 ```
 
@@ -147,7 +151,7 @@ So every payload bound for the repository — each file in a multi-file push, th
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
   create_or_update_file
-        found      GitHub personal access token in fixture/src/client.js:14 — ghp_****** (44 chars)
+        found      GitHub personal access token in src/client.js:14 — ghp_****** (44 chars)
 ```
 
 The rules are narrow on purpose — issuer prefixes, private key blocks, JWTs, and hardcoded assignments whose value doesn't look like a placeholder. A scanner that fires on every long string is a scanner people turn off. `LTP_SECRET_POLICY=warn` downgrades it to a red line on the approval prompt; `off` disables it. The default is to refuse, because a credential is not something a tired operator should have the option to wave through, and the cost of a false positive is one word in a config file.
@@ -165,7 +169,7 @@ npm run journal -- runs/sess_01J8Z.jsonl
 
 #  WHEN     TOOL                   PATHS                OUTCOME            OPERATOR
 1  4m ago   create_branch          —                    approved           ada@oncall-1
-2  4m ago   create_or_update_file  fixture/src/cart.js  approved           ada@oncall-1
+2  4m ago   create_or_update_file  src/cart.js          approved           ada@oncall-1
 3  3m ago   create_or_update_file  src/agent/spec.ts    blocked-perimeter  ada@oncall-1
 
   CHAIN VERIFIED 3 record(s)
@@ -204,6 +208,8 @@ This is not a model in a `while` loop with `fetch` calls bolted on. The harness 
 Swap `LTP_MODEL` and the same agent runs on a different provider — TrueForge is vendor-neutral, and so is this.
 
 ## Quick start
+
+> **Recording the demo or submitting?** Follow [docs/RUNBOOK.md](docs/RUNBOOK.md) instead — it is the same setup written end to end, with the video script and the submission checklist.
 
 **Requires Node 22.14+.**
 
@@ -256,7 +262,7 @@ src/
   cli/doctor.ts        pre-flight checks, including gate drift and perimeter sanity
   cli/perimeter.ts     judge paths against the perimeter; assertable in CI
   cli/journal.ts       verify a decision journal's hash chain
-fixture/               the service under repair — the only place the agent may write
+docs/RUNBOOK.md        end-to-end setup, and the demo hand-off
 runs/                  decision journals (git-ignored)
 docs/
   ARCHITECTURE.md      how the pieces fit, and why the gate sits where it does

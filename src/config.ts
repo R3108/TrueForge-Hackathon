@@ -40,10 +40,33 @@ function env(name: string, fallback?: string): string {
   );
 }
 
+/**
+ * This repository - the agent's own harness.
+ *
+ * The gate, the perimeter, the tripwire and the journal all live here. An agent
+ * pointed at this repo could propose a patch to any of them, and the operator
+ * approving it would be reading a diff produced by the thing the diff disarms.
+ * The perimeter would still refuse it, but that puts the whole safety argument
+ * on one glob matcher being right.
+ *
+ * So the target is a *different* repository, and that is enforced here rather
+ * than left to a comment in `.env.example`. There is deliberately no override:
+ * a flag to disable this would be the first thing anyone reached for.
+ */
+export const HARNESS_REPO = 'R3108/TrueForge-Hackathon';
+
 export function loadConfig(): Config {
   const targetRepo = env('LTP_TARGET_REPO');
   if (!/^[\w.-]+\/[\w.-]+$/.test(targetRepo)) {
     throw new Error(`LTP_TARGET_REPO must look like "owner/repo", got "${targetRepo}".`);
+  }
+
+  if (targetRepo.toLowerCase() === HARNESS_REPO.toLowerCase()) {
+    throw new Error(
+      `LTP_TARGET_REPO is set to ${targetRepo}, which is the agent's own harness. ` +
+        `Point it at the service the agent repairs (for example R3108/cart-service) ` +
+        `so that the approval gate is not something the agent can propose changes to.`,
+    );
   }
 
   return {

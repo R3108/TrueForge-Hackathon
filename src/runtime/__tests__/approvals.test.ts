@@ -79,8 +79,8 @@ describe('requestClearance', () => {
     stdin.isTTY = true;
 
     const decisions = await requestClearance(
-      [call({ toolName: 'create_or_update_file', args: { path: 'src/agent/spec.ts' } })],
-      { writePaths: ['fixture/**'] },
+      [call({ toolName: 'create_or_update_file', args: { path: '.github/workflows/ci.yml' } })],
+      { writePaths: ['src/**', '!.github/**'] },
     );
 
     assert.equal(decisions.length, 1);
@@ -99,13 +99,13 @@ describe('requestClearance', () => {
       [
         call({
           toolName: 'create_or_update_file',
-          args: { path: 'fixture/.github/workflows/ci.yml', content: 'on: push' },
+          args: { path: '.github/workflows/ci.yml', content: 'on: push' },
         }),
       ],
-      { writePaths: ['fixture/**', '!fixture/.github/**'] },
+      { writePaths: ['src/**', '!.github/**'] },
     );
 
-    assert.match(reasonOf(decisions[0]), /excluded by !fixture\/\.github/);
+    assert.match(reasonOf(decisions[0]), /excluded by !\.github/);
   });
 
   test('does not let a perimeter breach ride along with a legitimate write', async () => {
@@ -113,10 +113,10 @@ describe('requestClearance', () => {
 
     const decisions = await requestClearance(
       [
-        call({ toolCallId: 'inside', args: { path: 'fixture/src/cart.js' } }),
-        call({ toolCallId: 'outside', args: { path: 'src/runtime/approvals.ts' } }),
+        call({ toolCallId: 'inside', args: { path: 'src/cart.js' } }),
+        call({ toolCallId: 'outside', args: { path: '.github/workflows/ci.yml' } }),
       ],
-      { writePaths: ['fixture/**'] },
+      { writePaths: ['src/**', '!.github/**'] },
     );
 
     assert.equal(decisions.length, 2, 'every call must still be answered');
@@ -154,10 +154,10 @@ describe('requestClearance', () => {
       [
         call({
           toolName: 'create_or_update_file',
-          args: { path: 'fixture/src/client.js', content: `const auth = "${token}";` },
+          args: { path: 'src/client.js', content: `const auth = "${token}";` },
         }),
       ],
-      { writePaths: ['fixture/**'] },
+      { writePaths: ['src/**'] },
     );
 
     assert.equal(decisions[0]?.approval.status, 'deny');
@@ -170,8 +170,8 @@ describe('requestClearance', () => {
 
     const token = `ghp_${'a1B2c3D4e5F6g7H8i9J0'}${'kLmNoPqRsTuVwXyZ0123'}`;
     const decisions = await requestClearance(
-      [call({ toolName: 'create_or_update_file', args: { path: 'fixture/a.js', content: token } })],
-      { writePaths: ['fixture/**'], secretPolicy: 'warn' },
+      [call({ toolName: 'create_or_update_file', args: { path: 'src/a.js', content: token } })],
+      { writePaths: ['src/**'], secretPolicy: 'warn' },
     );
 
     assert.match(reasonOf(decisions[0]), /non-interactive/i);
@@ -195,17 +195,17 @@ describe('requestClearance', () => {
 
     await requestClearance(
       [
-        call({ toolCallId: 'a', args: { path: 'src/agent/spec.ts' } }),
-        call({ toolCallId: 'b', args: { path: 'fixture/src/cart.js' } }),
+        call({ toolCallId: 'a', args: { path: '.github/workflows/ci.yml' } }),
+        call({ toolCallId: 'b', args: { path: 'src/cart.js' } }),
       ],
-      { writePaths: ['fixture/**'], journal: log },
+      { writePaths: ['src/**', '!.github/**'], journal: log },
     );
 
     assert.deepEqual(
       log.entries().map((entry) => [entry.toolCallId, entry.outcome, entry.paths]),
       [
-        ['a', 'blocked-perimeter', ['src/agent/spec.ts']],
-        ['b', 'denied-no-tty', ['fixture/src/cart.js']],
+        ['a', 'blocked-perimeter', ['.github/workflows/ci.yml']],
+        ['b', 'denied-no-tty', ['src/cart.js']],
       ],
       'the record has to distinguish "nobody was asked" from "nobody was there"',
     );
