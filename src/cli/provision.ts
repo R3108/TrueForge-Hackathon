@@ -10,6 +10,7 @@ import { createClient } from '../client.ts';
 import { AGENT_NAME, buildAgentSpec, GITHUB_WRITE_TOOLS } from '../agent/spec.ts';
 import { findAgentId } from '../agent/registry.ts';
 import { banner, style } from '../runtime/render.ts';
+import { exitWhenFlushed } from './exit.ts';
 
 async function main(): Promise<void> {
   const config = loadConfig();
@@ -41,10 +42,12 @@ async function main(): Promise<void> {
   );
 }
 
-main().catch((error: unknown) => {
-  console.error(`\n${style.red('Provisioning failed:')} ${describe(error)}\n`);
-  process.exitCode = 1;
-});
+main()
+  .catch((error: unknown) => {
+    console.error(`\n${style.red('Provisioning failed:')} ${describe(error)}\n`);
+    process.exitCode = 1;
+  })
+  .finally(exitWhenFlushed);
 
 function describe(error: unknown): string {
   if (error instanceof Error) return error.message;

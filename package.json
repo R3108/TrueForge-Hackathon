@@ -14,6 +14,8 @@
     "provision": "node --env-file-if-exists=.env --experimental-strip-types src/cli/provision.ts",
     "dispatch": "node --env-file-if-exists=.env --experimental-strip-types src/cli/dispatch.ts",
     "doctor": "node --env-file-if-exists=.env --experimental-strip-types src/cli/doctor.ts",
+    "perimeter": "node --env-file-if-exists=.env --experimental-strip-types src/cli/perimeter.ts",
+    "journal": "node --env-file-if-exists=.env --experimental-strip-types src/cli/journal.ts",
     "demo:firewall": "node --experimental-strip-types src/cli/firewall-demo.ts",
     "bench": "npm run build && node --experimental-strip-types benchmark/deterministic_harness.mjs",
     "test": "node --experimental-strip-types --test \"src/**/*.test.ts\" \"packages/trueforge-core/tests/**/*.test.ts\" \"benchmark/**/*.test.mjs\"",

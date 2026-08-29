@@ -16,7 +16,11 @@ A live `npm run dispatch -- <incident>` run is optional. Do not substitute live 
 - [ ] `npm run demo:firewall` passes
 - [ ] Terminal font is readable at 720p
 - [ ] `docs/ARCHITECTURE.md` is open at the production coordinator diagram
-- [ ] If showing a live run, `npm run doctor` also passes
+- [ ] If showing a live run, `npm run doctor` also passes, the TrueForge chat UI is
+      open at `http://localhost:8790`, a real seeded bug exists in the target repo
+      with a matching Sentry issue, and Qodo is installed on the repo
+- [ ] Do one full dry run — `npm run dispatch -- --rehearse <issue-id>` refuses every
+      write, so the rehearsal costs you nothing and the first run always finds something
 
 ## The cut
 
@@ -75,6 +79,8 @@ Mention typed outcomes and reconciliation:
 **3:50–4:00 — Close**
 
 > "Malformed call, precise repair, fresh human approval, current evidence, deterministic loop stopping—and a concrete path to comprehensive core interception."
+
+If you have three spare seconds, cut back to the terminal at the end of a live run: the decision table, the audit digest, `npm run journal` verifying the chain. *"And there's a record of it — the denial, the approval, and a digest that changes if anyone edits the file."* Only if it fits; the denial is worth more.
 
 ## Optional live appendix
 

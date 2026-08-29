@@ -27,6 +27,29 @@ jobs:
       - name: Test
         run: npm test
 
+      # The perimeter is the one control that protects the other controls, so
+      # it is asserted rather than trusted. If a pull request ever widens
+      # LTP_WRITE_PATHS far enough for the agent to reach its own approval gate,
+      # this step fails before a human reviews the diff - which is the point:
+      # the change that removes the boundary is exactly the change nobody reads
+      # carefully.
+      - name: Perimeter holds against the control plane
+        env:
+          LTP_WRITE_PATHS: fixture/**,!fixture/.github/**
+        run: |
+          npm run perimeter -- --expect-blocked \
+            src/agent/spec.ts \
+            src/runtime/approvals.ts \
+            src/runtime/perimeter.ts \
+            src/runtime/secrets.ts \
+            package.json \
+            .github/workflows/ci.yml \
+            fixture/../src/agent/spec.ts \
+            fixture/.github/workflows/ci.yml
+          npm run perimeter -- --expect-allowed \
+            fixture/src/cart.js \
+            fixture/src/cart.test.js
+
   fixture:
     name: fixture (the service under repair)
     runs-on: ubuntu-latest

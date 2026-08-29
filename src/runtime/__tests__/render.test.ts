@@ -1,7 +1,7 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { preview, numberLines, summarizeCall, summarizeInline } from '../render.ts';
+import { preview, numberLines, summarizeCall, summarizeInline, payloadsIn } from '../render.ts';
 
 describe('preview', () => {
   test('leaves short values intact', () => {
@@ -75,12 +75,12 @@ describe('summarizeCall', () => {
   });
 
   test('surfaces the file content as the reviewable body', () => {
-    const { body } = summarizeCall('create_or_update_file', {
+    const { bodies } = summarizeCall('create_or_update_file', {
       path: 'src/cart.ts',
       content: 'line one\nline two',
     });
 
-    assert.equal(body?.text, 'line one\nline two');
+    assert.equal(bodies[0]?.text, 'line one\nline two');
   });
 
   test('flags a write that touches CI configuration', () => {
@@ -122,6 +122,51 @@ describe('summarizeCall', () => {
   test('survives a tool it has never seen', () => {
     assert.doesNotThrow(() => summarizeCall('some_future_tool', { wat: 1 }));
     assert.doesNotThrow(() => summarizeCall('create_branch', null));
+  });
+});
+
+describe('payloadsIn', () => {
+  test('collects every file body, not just the one on screen', () => {
+    const payloads = payloadsIn({
+      files: [
+        { path: 'fixture/src/cart.js', content: 'a' },
+        { path: 'fixture/src/client.js', content: 'b' },
+      ],
+    });
+
+    assert.deepEqual(
+      payloads.map((payload) => payload.label),
+      ['fixture/src/cart.js', 'fixture/src/client.js'],
+      'the scanner must see the file the reviewer never scrolled to',
+    );
+  });
+
+  test('labels a single file body with its path', () => {
+    assert.deepEqual(payloadsIn({ path: 'fixture/a.js', content: 'x' }), [
+      { label: 'fixture/a.js', text: 'x' },
+    ]);
+  });
+
+  test('includes prose destined for the repository', () => {
+    const labels = payloadsIn({
+      title: 'Fix null deref',
+      body: 'Root cause: …',
+      message: 'fix: guard against a missing cart',
+    }).map((payload) => payload.label);
+
+    // Titles are persisted exactly like bodies. Omitting them left a place to
+    // put a token that the tripwire would never look at.
+    assert.deepEqual(labels, ['body', 'message', 'title']);
+  });
+
+  test('includes the branch name, which is also written to the repository', () => {
+    assert.deepEqual(payloadsIn({ branch: 'fix/x', base: 'main' }), [
+      { label: 'branch', text: 'fix/x' },
+    ]);
+  });
+
+  test('returns nothing for a call that writes no text at all', () => {
+    assert.deepEqual(payloadsIn({ base: 'main', owner: 'R3108', repo: 'x' }), []);
   });
 });
 
