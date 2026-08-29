@@ -1,76 +1,242 @@
 import type { TrueForge, TrueForgeApi } from '@truefoundry/trueforge-sdk';
 import { style, preview, summarizeInline } from './render.ts';
-import { requestClearance, type PendingCall } from './approvals.ts';
-
-/**
- * Anything the harness streams. The SDK ships precise per-event types, but the
- * renderer only needs a handful of fields and benefits from tolerating event
- * types it has never seen - a new event kind should not crash an incident run.
- */
-interface StreamEvent {
-  type: string;
-  id?: string;
-  thread_id?: string | null;
-  content?: string | null;
-  [key: string]: unknown;
-}
+import { requestClearance, requestResponses } from './approvals.ts';
+import { EvidenceLedger, type EvidenceSummary, type TestEvidencePolicy } from './evidence.ts';
+import { ToolCallGate, type FirewallPolicy } from './gate.ts';
+import type { PendingAction, ToolInvocation } from './contracts.ts';
+import {
+  requiredActionIdentity,
+  resolveRequiredAction,
+  threadIdOf,
+  toolCallsOf,
+  type StreamEvent,
+} from './protocol.ts';
+import { AdaptiveAgentKernel, type KernelMetrics } from './kernel/index.ts';
+import type { ModelLimits } from './kernel/context.ts';
+import type { TaskContract } from './kernel/contract.ts';
+import {
+  renderBlock,
+  renderTaskObjective,
+  renderPhaseAndPlan,
+  renderContextPlan,
+  renderVerification,
+  type InfoBlock,
+} from './kernel-render.ts';
 
 type TurnInput = TrueForgeApi.TurnInputItem;
+const MAX_TURNS = 12;
 
-const MAX_RESUMES = 40;
+/** Optional adaptive-kernel configuration. Absent = legacy behavior. */
+export interface KernelPolicy {
+  enabled: boolean;
+  modelLimits: ModelLimits;
+}
 
 /**
- * Drive one incident to completion.
+ * Sink for additive, informational kernel state (task/phase/plan/context/
+ * verification/delegation). It is deliberately separate from the required-action
+ * (approval/response) path and is invoked only when the kernel is enabled.
  *
- * A turn ends whenever the agent needs a human: an approval on a gated tool, or
- * an answer to a clarifying question. We render the stream, collect whatever it
- * paused on, resolve it, and open the next turn - until the agent finishes with
- * nothing pending.
+ * Absent → the runtime prints informational blocks to the terminal via the
+ * existing render conventions. A client that wants to route them elsewhere (or
+ * ignore them entirely and stay compatible) may supply its own sink.
  */
+export type KernelInfoSink = (block: InfoBlock) => void;
+
+export interface IncidentPolicy extends FirewallPolicy, TestEvidencePolicy {
+  kernel?: KernelPolicy;
+  /** Optional consumer of informational kernel blocks. */
+  onKernelInfo?: KernelInfoSink;
+}
+
+export interface IncidentResult {
+  turns: number;
+  finalOutput: string;
+  status: 'done';
+  attempts: number;
+  workspaceEpoch: number;
+  evidence: EvidenceSummary;
+  /** Present only when the adaptive kernel is enabled. */
+  contract?: TaskContract;
+  kernelMetrics?: KernelMetrics;
+  /** True when a claimed success was blocked and rewritten by verification. */
+  falseCompletionBlocked?: boolean;
+}
+
+/** Drive one incident through bounded required-action continuations. */
 export async function runIncident(
   client: TrueForge,
   sessionId: string,
   brief: string,
-  writePaths: string[] = [],
-): Promise<{ turns: number; finalOutput: string }> {
+  policy: IncidentPolicy,
+): Promise<IncidentResult> {
   let input: TurnInput[] = [{ type: 'user.message', content: brief }];
-  let turns = 0;
   let finalOutput = '';
+  const evidence = new EvidenceLedger({
+    targetedCommand: policy.targetedCommand,
+    fullSuiteCommand: policy.fullSuiteCommand,
+    trustedExecutionTool: policy.trustedExecutionTool,
+  });
+  const gate = new ToolCallGate(policy, evidence);
 
-  for (let resume = 0; resume <= MAX_RESUMES; resume++) {
-    turns++;
-    const { pending, output, status } = await streamTurn(client, sessionId, input);
-    if (output) finalOutput = output;
+  // Informational kernel state is additive and never gates anything. Default to
+  // terminal output via the existing render conventions; a client may override.
+  const emitInfo: KernelInfoSink =
+    policy.onKernelInfo ??
+    ((block) => {
+      const text = renderBlock(block);
+      if (text) console.log(`\n${text}`);
+    });
 
-    if (pending.length === 0) {
-      console.log(`\n${style.dim(`Turn finished with status: ${status}`)}`);
-      return { turns, finalOutput };
-    }
-
-    const decisions = await requestClearance(pending, writePaths);
-    input = decisions;
+  // Adaptive kernel is additive and opt-in: absent config keeps legacy behavior.
+  const kernel = policy.kernel?.enabled
+    ? new AdaptiveAgentKernel({
+        enabled: true,
+        policyVersion: policy.policyVersion,
+        requireTestEvidence: policy.requireTestEvidence,
+        writePaths: policy.writePaths,
+        targetRepo: policy.targetRepo,
+        baseBranch: policy.baseBranch,
+        modelLimits: policy.kernel.modelLimits,
+      })
+    : undefined;
+  const contract = kernel?.admit(brief, sessionId);
+  if (kernel && contract) {
+    // Surface the task objective/status, the planned context budget, and the
+    // initial phase/plan snapshot the moment the contract is bound.
+    emitInfo(renderTaskObjective(contract));
+    emitInfo(renderContextPlan(kernel.contextPlan()));
+    emitInfo(renderPhaseAndPlan(kernel.workingState()));
+  }
+  if (kernel && contract && !contract.bypassed) {
+    kernel.recordState({ type: 'phase_changed', phase: 'executing' });
+    emitInfo(renderPhaseAndPlan(kernel.workingState()));
   }
 
-  throw new Error(
-    `Incident did not settle after ${MAX_RESUMES} approval rounds - stopping to avoid a loop.`,
-  );
+  for (let turnNumber = 1; turnNumber <= MAX_TURNS; turnNumber++) {
+    const result = await streamTurn(client, sessionId, input, policy, evidence);
+    finalOutput = result.output || finalOutput;
+
+    if (result.status !== 'done') {
+      if (result.status === 'error') {
+        throw new Error(`TrueForge turn failed${result.statusMessage ? `: ${result.statusMessage}` : '.'}`);
+      }
+      if (result.status === 'cancelled') {
+        throw new Error(`TrueForge turn was cancelled${result.statusMessage ? `: ${result.statusMessage}` : '.'}`);
+      }
+      throw new Error(`Turn ended in non-success state ${result.status}; buffered actions were discarded.`);
+    }
+
+    if (result.pending.length === 0) {
+      console.log(`\n${style.dim('Turn finished with status: done')}`);
+      // Generic completion verification: for action tasks, a claimed success
+      // without verified evidence / with pending or unknown work is rewritten
+      // into a truthful incomplete result. Simple questions are unaffected.
+      let verifiedOutput = finalOutput;
+      let falseCompletionBlocked: boolean | undefined;
+      if (kernel && contract) {
+        const unknownWrites = gate.attempts.filter((a) => a.state === 'unknown').length;
+        const decision = kernel.verify(finalOutput, evidence.summary(), 0, unknownWrites);
+        verifiedOutput = decision.output;
+        falseCompletionBlocked = decision.falseCompletionBlocked;
+        emitInfo(renderVerification(decision));
+        if (decision.satisfied && !contract.bypassed) {
+          kernel.recordState({ type: 'phase_changed', phase: 'complete' });
+          emitInfo(renderPhaseAndPlan(kernel.workingState()));
+        }
+      }
+      return {
+        turns: turnNumber,
+        finalOutput: verifiedOutput,
+        status: 'done',
+        attempts: gate.attempts.length,
+        workspaceEpoch: evidence.workspaceEpoch,
+        evidence: evidence.summary(),
+        ...(kernel && contract ? { contract } : {}),
+        ...(kernel ? { kernelMetrics: kernel.metrics } : {}),
+        ...(falseCompletionBlocked !== undefined ? { falseCompletionBlocked } : {}),
+      };
+    }
+
+    if (turnNumber === MAX_TURNS) {
+      throw new Error(`Incident did not settle within the ${MAX_TURNS}-turn continuation ceiling.`);
+    }
+
+    const approvals = result.pending.filter((action) => action.kind === 'approval');
+    const responses = result.pending.filter((action) => action.kind === 'response');
+    if (kernel && contract && !contract.bypassed) {
+      kernel.recordState({ type: 'phase_changed', phase: 'blocked' });
+      emitInfo(renderPhaseAndPlan(kernel.workingState()));
+    }
+    const approvalDecisions = await requestClearance(approvals, gate);
+    const responseDecisions = await requestResponses(responses, gate);
+    input = orderContinuationInputs(result.pending, approvalDecisions, responseDecisions);
+    if (kernel && contract && !contract.bypassed) {
+      kernel.recordState({ type: 'phase_changed', phase: 'executing' });
+      emitInfo(renderPhaseAndPlan(kernel.workingState()));
+    }
+  }
+
+  throw new Error('Incident continuation loop exited unexpectedly.');
+}
+
+export function orderContinuationInputs(
+  pending: readonly PendingAction[],
+  approvalDecisions: readonly TurnInput[],
+  responseDecisions: readonly TurnInput[],
+): TurnInput[] {
+  const approvals = [...approvalDecisions];
+  const responses = [...responseDecisions];
+  const ordered = pending.map((action): TurnInput => {
+    const candidates = action.kind === 'approval' ? approvals : responses;
+    const expectedType = action.kind === 'approval' ? 'user.tool_approval' : 'user.tool_response';
+    const index = candidates.findIndex((decision) => {
+      const value = object(decision);
+      return (
+        value?.type === expectedType &&
+        value.threadId === action.invocation.key.threadId &&
+        value.toolCallId === action.invocation.key.toolCallId
+      );
+    });
+    if (index < 0) {
+      throw new Error(
+        `No ${expectedType} result exists for ${action.invocation.key.threadId}/${action.invocation.key.toolCallId}.`,
+      );
+    }
+    const [decision] = candidates.splice(index, 1);
+    if (!decision) throw new Error('Continuation decision unexpectedly disappeared.');
+    return decision;
+  });
+
+  if (approvals.length > 0 || responses.length > 0) {
+    throw new Error('Continuation produced a decision without a corresponding required action.');
+  }
+  return ordered;
+}
+
+interface StreamTurnResult {
+  pending: PendingAction[];
+  output: string;
+  status: string;
+  statusMessage?: string;
 }
 
 async function streamTurn(
   client: TrueForge,
   sessionId: string,
   input: TurnInput[],
-): Promise<{ pending: PendingCall[]; output: string; status: string }> {
+  policy: IncidentPolicy,
+  evidence: EvidenceLedger,
+): Promise<StreamTurnResult> {
   const stream = await client.sessions.createTurnStream(sessionId, { input });
-
-  /** model.message events by id, so an approval can name the tool it belongs to. */
   const eventsById = new Map<string, StreamEvent>();
-  const pendingEvents: StreamEvent[] = [];
+  const pendingEvents = new Map<string, StreamEvent>();
   const openThreads = new Set<string>();
-
+  let turnId = 'unknown';
   let streamingText = false;
   let output = '';
   let status = 'unknown';
+  let statusMessage: string | undefined;
 
   const endText = () => {
     if (streamingText) {
@@ -85,7 +251,8 @@ async function streamTurn(
 
     switch (event.type) {
       case 'turn.created':
-        console.log(style.dim(`\n· turn started`));
+        turnId = String(event.turnId ?? event.turn_id ?? event.id ?? 'unknown');
+        console.log(style.dim('\n· turn started'));
         break;
 
       case 'mcp.initialize': {
@@ -97,9 +264,7 @@ async function streamTurn(
       case 'mcp.auth_required': {
         endText();
         const servers = mcpServersOf(event);
-        if (servers.length === 0) {
-          console.log(style.yellow('· a connector needs authorization'));
-        }
+        if (servers.length === 0) console.log(style.yellow('· a connector needs authorization'));
         for (const server of servers) {
           console.log(style.yellow(`· connector ${style.bold(labelOf(server))} needs authorization`));
           const url = server.auth_url ?? server.authUrl;
@@ -109,7 +274,7 @@ async function streamTurn(
       }
 
       case 'thread.created': {
-        const id = String(event.id ?? event.thread_id ?? '');
+        const id = String(event.id ?? event.threadId ?? event.thread_id ?? '');
         if (id && id !== 'main' && !openThreads.has(id)) {
           openThreads.add(id);
           endText();
@@ -119,7 +284,7 @@ async function streamTurn(
       }
 
       case 'thread.done': {
-        const id = String(event.id ?? event.thread_id ?? '');
+        const id = String(event.id ?? event.threadId ?? event.thread_id ?? '');
         if (openThreads.delete(id)) {
           endText();
           console.log(style.blue(`· subagent finished (${id.slice(0, 8)})`));
@@ -128,43 +293,60 @@ async function streamTurn(
       }
 
       case 'model.message': {
-        const call = toolCallOf(event);
-        if (call) {
+        for (const call of toolCallsOf(event)) {
+          const invocation = invocationFromCall(sessionId, turnId, event, call, policy);
+          evidence.observeInvocation(invocation);
           endText();
-          console.log(`${style.cyan('· tool')} ${summarizeInline(call.name, call.args)}`);
+          console.log(`${style.cyan('· tool')} ${summarizeInline(call.name, call.arguments)}`);
         }
         break;
       }
 
       case 'model.message.delta':
-        if (event.content) {
+        if (typeof event.content === 'string' && event.content) {
           streamingText = true;
           process.stdout.write(event.content);
         }
         break;
 
-      case 'tool.response':
+      case 'tool.response': {
         endText();
+        const callId = stringValue(event.toolCallId ?? event.tool_call_id);
+        if (callId) {
+          evidence.observeResponseForCall(
+            sessionId,
+            threadIdOf(event),
+            callId,
+            evidencePayload(event),
+          );
+        }
         console.log(style.dim(`  ↳ ${preview(event.content ?? event.output, 240)}`));
         break;
+      }
 
       case 'tool.approval_required':
       case 'tool.response_required':
         endText();
-        pendingEvents.push(event);
+        pendingEvents.set(requiredActionIdentity(event), event);
         break;
 
       case 'turn.done': {
         endText();
-        const state = (event.state ?? {}) as {
-          status?: string;
-          output?: { content?: string } | null;
-          required_actions?: StreamEvent[];
-        };
-        status = state.status ?? 'unknown';
-        output = state.output?.content ?? '';
-        for (const action of state.required_actions ?? []) {
-          if (!pendingEvents.some((p) => sameCall(p, action))) pendingEvents.push(action);
+        const state = object(event.state);
+        status = stringValue(state?.status) ?? 'unknown';
+        statusMessage = stringValue(state?.message ?? state?.reason);
+        output = outputContent(state?.output);
+        const actions = state?.requiredActions ?? state?.required_actions;
+        if (Array.isArray(actions)) {
+          for (const value of actions) {
+            const action = object(value) as StreamEvent | undefined;
+            if (
+              action &&
+              (action.type === 'tool.approval_required' || action.type === 'tool.response_required')
+            ) {
+              pendingEvents.set(requiredActionIdentity(action), action);
+            }
+          }
         }
         break;
       }
@@ -175,11 +357,67 @@ async function streamTurn(
   }
 
   endText();
-  return { pending: pendingEvents.map((e) => resolvePending(e, eventsById)), output, status };
+  const pending = [...pendingEvents.values()].flatMap((event) =>
+    resolveRequiredAction(event, eventsById, {
+      sessionId,
+      turnId,
+      policyVersion: policy.policyVersion,
+    }),
+  );
+  return { pending, output, status, ...(statusMessage ? { statusMessage } : {}) };
 }
 
-function sameCall(a: StreamEvent, b: StreamEvent): boolean {
-  return callId(a) !== undefined && callId(a) === callId(b);
+export function invocationFromCall(
+  sessionId: string,
+  turnId: string,
+  event: StreamEvent,
+  call: ReturnType<typeof toolCallsOf>[number],
+  policy: IncidentPolicy,
+): ToolInvocation {
+  const trusted = policy.trustedExecutionTool;
+  const trustedExecutionProducer =
+    trusted !== undefined &&
+    call.toolSetId === trusted.toolSetId &&
+    call.toolSetName === trusted.toolSetName &&
+    call.toolType === trusted.toolType;
+  return {
+    key: { sessionId, turnId, threadId: threadIdOf(event), toolCallId: call.id },
+    sourceEventId: event.id ?? 'unknown',
+    origin: trustedExecutionProducer ? 'sandbox' : 'agent',
+    toolSetId: call.toolSetId,
+    toolSetName: call.toolSetName,
+    toolType: call.toolType,
+    toolName: call.name,
+    arguments: call.arguments,
+    policyVersion: policy.policyVersion,
+    validationViolations: call.validationViolations,
+  };
+}
+
+function object(value: unknown): Record<string, unknown> | undefined {
+  return value !== null && typeof value === 'object' ? (value as Record<string, unknown>) : undefined;
+}
+
+function stringValue(value: unknown): string | undefined {
+  return typeof value === 'string' && value.length > 0 ? value : undefined;
+}
+
+function evidencePayload(event: StreamEvent): unknown {
+  const facts = event.executionFacts ?? event.execution_facts;
+  return facts === undefined ? event.content ?? event.output : { executionFacts: facts };
+}
+
+function outputContent(value: unknown): string {
+  const output = object(value);
+  const content = output?.content;
+  if (typeof content === 'string') return content;
+  if (Array.isArray(content)) {
+    return content
+      .map((item) => object(item)?.text)
+      .filter((item): item is string => typeof item === 'string')
+      .join('\n');
+  }
+  return '';
 }
 
 interface McpServerRef {
@@ -189,61 +427,11 @@ interface McpServerRef {
   authUrl?: string;
 }
 
-/**
- * `mcp.*` events carry an `mcp_servers` array - `[{ id, name, auth_url }]` - not
- * a scalar server name. The `auth_url` is the whole point of an auth_required
- * event: it is the link that unblocks the connector.
- */
 function mcpServersOf(event: StreamEvent): McpServerRef[] {
-  const servers = event.mcp_servers ?? event.mcpServers;
+  const servers = event.mcpServers ?? event.mcp_servers;
   return Array.isArray(servers) ? (servers as McpServerRef[]) : [];
 }
 
 function labelOf(server: McpServerRef): string {
   return server.name ?? server.id ?? '(unnamed)';
-}
-
-function callId(event: StreamEvent): string | undefined {
-  const id = event.tool_call_id ?? event.toolCallId;
-  return typeof id === 'string' ? id : undefined;
-}
-
-/**
- * Turn a pause event into something worth showing a human: the pause itself only
- * carries ids, so the tool's name and arguments come from the `model.message`
- * that requested it.
- */
-function resolvePending(event: StreamEvent, index: Map<string, StreamEvent>): PendingCall {
-  const sourceId = event.source_event_id ?? event.sourceEventId;
-  const source = typeof sourceId === 'string' ? index.get(sourceId) : undefined;
-  const call = source ? toolCallOf(source) : undefined;
-
-  return {
-    threadId: String(event.thread_id ?? 'main'),
-    toolCallId: callId(event) ?? '',
-    toolName: call?.name ?? 'unknown tool',
-    args: call?.args ?? event.arguments ?? {},
-  };
-}
-
-/** Pull the first tool call out of a model.message, tolerating shape drift. */
-function toolCallOf(event: StreamEvent): { name: string; args: unknown } | undefined {
-  const calls = event.tool_calls ?? event.toolCalls;
-  if (!Array.isArray(calls) || calls.length === 0) return undefined;
-
-  const first = calls[0] as Record<string, unknown>;
-  const fn = (first.function ?? first) as Record<string, unknown>;
-  const name = fn.name;
-  if (typeof name !== 'string') return undefined;
-
-  const rawArgs = fn.arguments ?? fn.args;
-  let args: unknown = rawArgs;
-  if (typeof rawArgs === 'string') {
-    try {
-      args = JSON.parse(rawArgs);
-    } catch {
-      args = rawArgs;
-    }
-  }
-  return { name, args };
 }

@@ -2,22 +2,51 @@ import { test, describe, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { stdin } from 'node:process';
 
-import { requestClearance, type PendingCall } from '../approvals.ts';
+import { requestClearance, requestResponses } from '../approvals.ts';
+import type { PendingApproval, PendingResponse, ToolInvocation } from '../contracts.ts';
+import { EvidenceLedger } from '../evidence.ts';
+import { ToolCallGate } from '../gate.ts';
 
-/**
- * The safety claim of this project is that the agent cannot write to a
- * repository while nobody is watching. These tests hold that claim to account.
- */
+const policy = {
+  targetRepo: 'truefoundry/example',
+  baseBranch: 'main',
+  writePaths: ['fixture/**'],
+  githubConnector: 'github',
+  githubConnectorId: 'github-id',
+  policyVersion: 'test-v1',
+  requireTestEvidence: false,
+};
 
-const call = (overrides: Partial<PendingCall> = {}): PendingCall => ({
-  threadId: 'main',
-  toolCallId: 'call_1',
-  toolName: 'create_pull_request',
-  args: { title: 'Fix null deref in cart.ts' },
-  ...overrides,
-});
+function gate(): ToolCallGate {
+  return new ToolCallGate(policy, new EvidenceLedger(), Buffer.alloc(32, 7));
+}
 
-describe('requestClearance', () => {
+function invocation(overrides: Partial<ToolInvocation> = {}): ToolInvocation {
+  return {
+    key: {
+      sessionId: 'session_1',
+      turnId: 'turn_1',
+      threadId: 'main',
+      toolCallId: 'call_1',
+    },
+    sourceEventId: 'event_1',
+    origin: 'agent',
+    toolSetId: 'github-id',
+    toolSetName: 'github',
+    toolType: 'mcp',
+    toolName: 'create_branch',
+    arguments: { owner: 'truefoundry', repo: 'example', branch: 'fix/cart' },
+    policyVersion: 'test-v1',
+    validationViolations: [],
+    ...overrides,
+  };
+}
+
+function approval(overrides: Partial<ToolInvocation> = {}): PendingApproval {
+  return { kind: 'approval', actionId: 'action_1', invocation: invocation(overrides) };
+}
+
+describe('required action handling', () => {
   let originalIsTTY: boolean | undefined;
 
   before(() => {
@@ -25,98 +54,79 @@ describe('requestClearance', () => {
   });
 
   after(() => {
-    // `isTTY` is absent (not false) on a real non-TTY stream, so restore shape.
     if (originalIsTTY === undefined) delete (stdin as { isTTY?: boolean }).isTTY;
     else stdin.isTTY = originalIsTTY;
   });
 
   test('returns no decisions when nothing is pending', async () => {
-    const decisions = await requestClearance([]);
-    assert.deepEqual(decisions, []);
+    assert.deepEqual(await requestClearance([], gate()), []);
   });
 
-  test('denies every pending write when there is no interactive terminal', async () => {
+  test('denies every reviewable write when there is no interactive terminal', async () => {
     stdin.isTTY = false;
-
-    const decisions = await requestClearance([
-      call({ toolCallId: 'call_a', toolName: 'create_branch' }),
-      call({ toolCallId: 'call_b', toolName: 'create_pull_request' }),
-    ]);
-
-    assert.equal(decisions.length, 2, 'every pending call must be answered');
-    for (const decision of decisions) {
-      assert.equal(decision.type, 'user.tool_approval');
-      assert.equal(
-        decision.approval.status,
-        'deny',
-        'an unattended session must never auto-approve a repository write',
-      );
-    }
-  });
-
-  test('gives the agent a reason when it denies, so it can explain itself', async () => {
-    stdin.isTTY = false;
-
-    const [decision] = await requestClearance([call()]);
-    assert.ok(decision, 'expected a decision');
-    assert.equal(decision.approval.status, 'deny');
-    assert.match(
-      (decision.approval as { reason: string }).reason,
-      /non-interactive/i,
-      'the denial reason should tell the agent why it was refused',
-    );
-  });
-
-  test('denies a write outside the perimeter without asking a human', async () => {
-    // A TTY is present, so the only reason this can be denied is the perimeter.
-    stdin.isTTY = true;
-
-    const decisions = await requestClearance(
-      [call({ toolName: 'create_or_update_file', args: { path: 'src/agent/spec.ts' } })],
-      ['fixture/**'],
-    );
-
-    assert.equal(decisions.length, 1);
-    assert.equal(decisions[0]?.approval.status, 'deny');
-    assert.match(
-      (decisions[0]?.approval as { reason: string }).reason,
-      /perimeter/i,
-      'the agent should be told which boundary it hit',
-    );
-  });
-
-  test('does not let a perimeter breach ride along with a legitimate write', async () => {
-    stdin.isTTY = false;
-
     const decisions = await requestClearance(
       [
-        call({ toolCallId: 'inside', args: { path: 'fixture/src/cart.js' } }),
-        call({ toolCallId: 'outside', args: { path: 'src/runtime/approvals.ts' } }),
+        approval(),
+        approval({ key: { ...invocation().key, toolCallId: 'call_b', threadId: 'sub_7f2a' } }),
       ],
-      ['fixture/**'],
+      gate(),
     );
 
-    assert.equal(decisions.length, 2, 'every call must still be answered');
-    for (const decision of decisions) {
-      assert.equal(decision.approval.status, 'deny');
-    }
-  });
-
-  test('answers each pending call with its own id, not a shared one', async () => {
-    stdin.isTTY = false;
-
-    const decisions = await requestClearance([
-      call({ toolCallId: 'call_a', threadId: 'main' }),
-      call({ toolCallId: 'call_b', threadId: 'sub_7f2a' }),
-    ]);
-
+    assert.equal(decisions.length, 2);
     assert.deepEqual(
-      decisions.map((d) => [d.toolCallId, d.threadId]),
+      decisions.map((decision) => [decision.toolCallId, decision.threadId, decision.approval.status]),
       [
-        ['call_a', 'main'],
-        ['call_b', 'sub_7f2a'],
+        ['call_1', 'main', 'deny'],
+        ['call_b', 'sub_7f2a', 'deny'],
       ],
-      'a decision routed to the wrong call would approve something unreviewed',
     );
+  });
+
+  test('blocks a write outside the perimeter before asking a human', async () => {
+    stdin.isTTY = true;
+    const decisions = await requestClearance(
+      [
+        approval({
+          toolName: 'create_or_update_file',
+          arguments: {
+            owner: 'truefoundry',
+            repo: 'example',
+            branch: 'fix/cart',
+            path: 'src/runtime/approvals.ts',
+            content: '// unsafe',
+          },
+        }),
+      ],
+      gate(),
+    );
+
+    assert.equal(decisions[0]?.approval.status, 'deny');
+    assert.match((decisions[0]?.approval as { reason: string }).reason, /perimeter/i);
+  });
+
+  test('uses user.tool_response for response-required actions', async () => {
+    stdin.isTTY = false;
+    const pending: PendingResponse = {
+      kind: 'response',
+      actionId: 'response_1',
+      invocation: invocation({ origin: 'client', toolName: 'ask_user' }),
+    };
+
+    const [decision] = await requestResponses([pending]);
+    assert.equal(decision?.type, 'user.tool_response');
+    assert.equal(decision?.toolCallId, 'call_1');
+    assert.match(decision?.content ?? '', /human_response_unavailable/);
+  });
+
+  test('replays a prior decision without evaluating or prompting again', async () => {
+    stdin.isTTY = false;
+    const firewall = gate();
+    const pending = approval();
+    const first = await requestClearance([pending], firewall);
+    const attempts = firewall.attempts.length;
+    const second = await requestClearance([pending], firewall);
+
+    assert.deepEqual(second, first);
+    assert.equal(firewall.attempts.length, attempts, 'duplicate action must not create another attempt');
   });
 });

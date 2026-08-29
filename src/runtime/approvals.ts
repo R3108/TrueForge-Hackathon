@@ -2,125 +2,118 @@ import { createInterface } from 'node:readline/promises';
 import { stdin, stdout } from 'node:process';
 import type { TrueForgeApi } from '@truefoundry/trueforge-sdk';
 import { style, preview, summarizeCall, renderFields, numberLines } from './render.ts';
-import { checkPerimeter } from './perimeter.ts';
+import type { PendingApproval, PendingResponse } from './contracts.ts';
+import type { EvidenceSummary } from './evidence.ts';
+import { ToolCallGate, type GateEvaluation } from './gate.ts';
 
-/**
- * A tool call the harness has paused, resolved against the event index so we
- * can show the operator what they are actually approving.
- */
-export interface PendingCall {
-  threadId: string;
-  toolCallId: string;
-  toolName: string;
-  args: unknown;
-}
+export type ApprovalDecision = TrueForgeApi.UserToolApprovalEvent;
+export type ResponseDecision = TrueForgeApi.UserToolResponseEvent;
+export type Decision = TrueForgeApi.TurnInputItem;
 
-/**
- * Aliased to the SDK's own type rather than re-declared: this is the payload the
- * approval gate sends back, and a silent key mismatch here would be a safety
- * bug, not a cosmetic one.
- */
-export type Decision = TrueForgeApi.UserToolApprovalEvent;
-
-function deny(call: PendingCall, reason: string): Decision {
+function deny(call: PendingApproval, reason: string): ApprovalDecision {
   return {
     type: 'user.tool_approval',
-    threadId: call.threadId,
-    toolCallId: call.toolCallId,
+    threadId: call.invocation.key.threadId,
+    toolCallId: call.invocation.key.toolCallId,
     approval: { status: 'deny', reason },
   };
 }
 
-/**
- * Ask a human before the agent writes to the repository.
- *
- * This is deliberately a blocking, explicit prompt: the whole safety argument of
- * this project is that the agent cannot mutate a repo while nobody is looking.
- * A non-TTY session (CI, piped input) denies by default rather than silently
- * auto-approving - failing closed is the only safe direction here.
- *
- * Writes outside the declared perimeter never reach the prompt at all. An
- * operator cannot approve what they are never shown, which is the point: the
- * boundary should not be something a tired human can be walked through.
- */
+function allow(call: PendingApproval): ApprovalDecision {
+  return {
+    type: 'user.tool_approval',
+    threadId: call.invocation.key.threadId,
+    toolCallId: call.invocation.key.toolCallId,
+    approval: { status: 'allow' },
+  };
+}
+
+/** Apply deterministic policy before offering only exact, reviewable calls to a human. */
 export async function requestClearance(
-  pending: PendingCall[],
-  writePaths: string[] = [],
-): Promise<Decision[]> {
+  pending: PendingApproval[],
+  gate: ToolCallGate,
+): Promise<ApprovalDecision[]> {
   if (pending.length === 0) return [];
 
-  const decisions: Decision[] = [];
-  const reviewable: PendingCall[] = [];
+  const decisions: ApprovalDecision[] = [];
+  const reviewable: Array<{ call: PendingApproval; evaluation: GateEvaluation }> = [];
 
   for (const call of pending) {
-    const verdict = checkPerimeter(call.args, writePaths);
-    if (verdict.status === 'blocked') {
+    const replay = gate.processedDecision(call.invocation);
+    if (replay) {
       decisions.push(
-        deny(
-          call,
-          `Refused by the write perimeter. ${call.toolName} would write to ${verdict.offending.join(', ')}, which is outside the declared perimeter (${writePaths.join(', ')}). No human was asked.`,
-        ),
+        replay.status === 'allow'
+          ? allow(call)
+          : deny(call, replay.reason ?? 'This required action was already denied.'),
       );
-      renderBlocked(call, verdict.offending, writePaths);
+      continue;
+    }
+
+    const evaluation = gate.evaluate(call.invocation);
+    if (evaluation.decision.type === 'repair') {
+      const decision = deny(call, evaluation.decision.feedback);
+      decisions.push(decision);
+      gate.recordManagedDenial(call.invocation, evaluation.fingerprint, evaluation.decision.feedback);
+      renderBlocked(call, 'REPAIR REQUESTED', evaluation.decision.feedback);
+    } else if (evaluation.decision.type === 'deny') {
+      const decision = deny(call, evaluation.decision.reason);
+      decisions.push(decision);
+      gate.recordManagedDenial(call.invocation, evaluation.fingerprint, evaluation.decision.reason);
+      renderBlocked(call, 'BLOCKED BY TOOL-CALL FIREWALL', evaluation.decision.reason);
+    } else if (evaluation.decision.type === 'allow') {
+      // Approval-required events are never auto-approved: an application allow
+      // cannot weaken TrueForge's core requirement.
+      reviewable.push({ call, evaluation: { ...evaluation, decision: { type: 'require_approval', reasons: ['Core TrueForge approval remains required.'] } } });
     } else {
-      reviewable.push(call);
+      reviewable.push({ call, evaluation });
     }
   }
 
   if (reviewable.length === 0) return decisions;
 
-  console.log(`\n${style.yellow('━'.repeat(64))}`);
-  console.log(style.yellow(style.bold('  CLEARANCE REQUIRED')));
-  console.log(
-    style.dim(
-      reviewable.length === 1
-        ? '  The agent wants to run 1 action that writes to your repository.'
-        : `  The agent wants to run ${reviewable.length} actions that write to your repository.`,
-    ),
-  );
-  console.log(`${style.yellow('━'.repeat(64))}\n`);
+  console.log(`\n${style.yellow('━'.repeat(72))}`);
+  console.log(style.yellow(style.bold('  EVIDENCE-AWARE CLEARANCE REQUIRED')));
+  console.log(style.dim(`  ${reviewable.length} exact action${reviewable.length === 1 ? '' : 's'} await a human decision.`));
+  console.log(`${style.yellow('━'.repeat(72))}\n`);
 
   if (!stdin.isTTY) {
-    console.log(
-      style.red('  No interactive terminal detected - denying by default (fail closed).\n'),
-    );
-    return [
-      ...decisions,
-      ...reviewable.map((call) =>
-        deny(call, 'No human present to approve a repository write (non-interactive session).'),
-      ),
-    ];
+    console.log(style.red('  No interactive terminal detected - denying by default (fail closed).\n'));
+    for (const { call, evaluation } of reviewable) {
+      const reason = 'No human present to approve a sensitive write (non-interactive session).';
+      decisions.push(deny(call, reason));
+      gate.recordHumanDecision(call.invocation, evaluation.fingerprint, 'deny', reason);
+    }
+    return decisions;
   }
 
   const rl = createInterface({ input: stdin, output: stdout });
-
   try {
-    for (const [index, call] of reviewable.entries()) {
-      renderCall(index + 1, reviewable.length, call);
-
-      const answer = (await rl.question(`  ${style.bold('Allow this? [y/N] ')}`))
+    for (const [index, item] of reviewable.entries()) {
+      const terminal = gate.processedDecision(item.call.invocation);
+      if (terminal?.status === 'deny') {
+        decisions.push(deny(item.call, terminal.reason ?? 'A prior human denial is terminal.'));
+        renderBlocked(
+          item.call,
+          'BLOCKED BY TERMINAL HUMAN DENIAL',
+          terminal.reason ?? 'A prior human denial is terminal.',
+        );
+        continue;
+      }
+      renderApprovalCard(index + 1, reviewable.length, item.call, item.evaluation);
+      const answer = (await rl.question(`  ${style.bold('Approve this exact call once? [y/N] ')}`))
         .trim()
         .toLowerCase();
-
       if (answer === 'y' || answer === 'yes') {
-        console.log(`  ${style.green('APPROVED')}\n`);
-        decisions.push({
-          type: 'user.tool_approval',
-          threadId: call.threadId,
-          toolCallId: call.toolCallId,
-          approval: { status: 'allow' },
-        });
+        decisions.push(allow(item.call));
+        gate.recordHumanDecision(item.call.invocation, item.evaluation.fingerprint, 'allow');
+        console.log(`  ${style.green('APPROVED ONCE')}\n`);
       } else {
         const reason =
           (await rl.question(`  ${style.dim('Reason for denial (optional): ')}`)).trim() ||
           'Denied by the on-call operator.';
+        decisions.push(deny(item.call, reason));
+        gate.recordHumanDecision(item.call.invocation, item.evaluation.fingerprint, 'deny', reason);
         console.log(`  ${style.red('DENIED')} ${style.dim(reason)}\n`);
-        decisions.push({
-          type: 'user.tool_approval',
-          threadId: call.threadId,
-          toolCallId: call.toolCallId,
-          approval: { status: 'deny', reason },
-        });
       }
     }
   } finally {
@@ -130,62 +123,140 @@ export async function requestClearance(
   return decisions;
 }
 
+/** Response-required calls are client responses, never approval decisions. */
+export async function requestResponses(
+  pending: PendingResponse[],
+  gate?: ToolCallGate,
+): Promise<ResponseDecision[]> {
+  if (pending.length === 0) return [];
+
+  const rl = stdin.isTTY ? createInterface({ input: stdin, output: stdout }) : undefined;
+  try {
+    const responses: ResponseDecision[] = [];
+    for (const call of pending) {
+      if (gate?.isConfiguredWrite(call.invocation)) {
+        const reason =
+          'Configured GitHub write arrived as tool.response_required; sensitive writes require the approval protocol.';
+        const replay = gate.processedDecision(call.invocation);
+        if (!replay) {
+          const evaluation = gate.evaluate(call.invocation);
+          gate.recordManagedDenial(call.invocation, evaluation.fingerprint, reason);
+        }
+        responses.push({
+          type: 'user.tool_response',
+          threadId: call.invocation.key.threadId,
+          toolCallId: call.invocation.key.toolCallId,
+          content: JSON.stringify({
+            error: 'unexpected_required_action_kind',
+            repairable: false,
+            reason,
+          }),
+        });
+        continue;
+      }
+
+      if (!rl) {
+        responses.push({
+          type: 'user.tool_response',
+          threadId: call.invocation.key.threadId,
+          toolCallId: call.invocation.key.toolCallId,
+          content: JSON.stringify({ error: 'human_response_unavailable', repairable: false }),
+        });
+        continue;
+      }
+
+      console.log(`\n  ${style.bold(style.cyan(call.invocation.toolName))}`);
+      console.log(style.dim(`  Client response required for ${call.invocation.key.toolCallId}.`));
+      console.log(style.dim(preview(call.invocation.arguments, 1200)));
+      const content = await rl.question(`  ${style.bold('Response: ')}`);
+      responses.push({
+        type: 'user.tool_response',
+        threadId: call.invocation.key.threadId,
+        toolCallId: call.invocation.key.toolCallId,
+        content,
+      });
+    }
+    return responses;
+  } finally {
+    rl?.close();
+  }
+}
+
 const PAD = '        ';
 
-/**
- * A write that never got to ask. Rendered loudly and distinctly from a denial:
- * a human said no to the second kind, and nobody was consulted about the first.
- */
-function renderBlocked(call: PendingCall, offending: string[], writePaths: string[]): void {
-  console.log(`\n${style.red('━'.repeat(64))}`);
-  console.log(style.red(style.bold('  BLOCKED BY WRITE PERIMETER')));
+function renderBlocked(call: PendingApproval, title: string, reason: string): void {
+  console.log(`\n${style.red('━'.repeat(72))}`);
+  console.log(style.red(style.bold(`  ${title}`)));
   console.log(style.dim('  Denied automatically. No approval was offered.'));
-  console.log(`${style.red('━'.repeat(64))}\n`);
-
-  console.log(`  ${style.bold(style.cyan(call.toolName))}`);
-  console.log(
-    renderFields(
-      [
-        ['outside', offending.join(', ')],
-        ['perimeter', writePaths.join(', ')],
-      ],
-      PAD,
-    ),
-  );
+  console.log(`${style.red('━'.repeat(72))}\n`);
+  console.log(`  ${style.bold(style.cyan(call.invocation.toolName))}`);
+  console.log(renderFields([['call ID', call.invocation.key.toolCallId], ['reason', reason]], PAD));
   console.log('');
 }
 
-/**
- * Show the operator what they are about to approve.
- *
- * Structured per tool rather than a JSON dump: the fields that locate the write
- * (repo, branch, path), any reason to look twice, and then the payload itself as
- * numbered lines. An unrecognised tool falls back to raw arguments - showing
- * nothing would be worse than showing something ugly.
- */
-function renderCall(position: number, total: number, call: PendingCall): void {
-  const summary = summarizeCall(call.toolName, call.args);
+function check(mark: boolean, text: string): string {
+  return `${mark ? style.green('✓') : style.yellow('!')} ${text}`;
+}
 
-  console.log(
-    `  ${style.dim(`(${position}/${total})`)} ${style.bold(style.cyan(call.toolName))}`,
+function evidenceLines(evidence: EvidenceSummary): string[] {
+  const regression = evidence.regressionObserved
+    ? evidence.regressionIsHistorical
+      ? 'Regression reproduced (historical baseline; later mutation observed)'
+      : 'Regression reproduced at current workspace epoch'
+    : 'Regression reproduction not observed';
+  return [
+    check(evidence.regressionObserved, regression),
+    check(evidence.targetedTestPassed, 'Targeted regression test passed at current epoch'),
+    check(evidence.fullSuitePassed, 'Full suite passed at current epoch'),
+    ...(evidence.unverifiedSuccessObserved
+      ? [style.yellow('! Output mentions success, but no structured exit status verified it')]
+      : []),
+    style.dim(`workspace epoch ${evidence.workspaceEpoch}`),
+  ];
+}
+
+export function renderApprovalCard(
+  position: number,
+  total: number,
+  call: PendingApproval,
+  evaluation: GateEvaluation,
+): void {
+  const invocation = call.invocation;
+  const summary = summarizeCall(invocation.toolName, invocation.arguments);
+  console.log(`  ${style.dim(`(${position}/${total})`)} ${style.bold(style.cyan(invocation.toolName))}`);
+  const fields = renderFields(
+    [
+      ['call ID', invocation.key.toolCallId],
+      ['fingerprint', evaluation.fingerprint.slice(0, 16)],
+      ['repair budget', `${evaluation.repairAttempt} / 2`],
+      ...summary.fields,
+    ],
+    PAD,
   );
-
-  const fields = renderFields(summary.fields, PAD);
   if (fields) console.log(fields);
 
-  for (const risk of summary.risks) {
-    console.log(`${PAD}${style.yellow(`! ${risk}`)}`);
-  }
+  console.log(`\n${PAD}${style.bold('Policy')}`);
+  const decisionReason =
+    evaluation.decision.type === 'human_review'
+      ? evaluation.decision.reason
+      : evaluation.decision.type === 'require_approval'
+        ? evaluation.decision.reasons.join(' ')
+        : 'Policy preflight completed.';
+  console.log(`${PAD}${check(true, 'Exact repository and perimeter preflight completed')}`);
+  console.log(`${PAD}${check(true, 'Approval is bound to this call ID and fingerprint')}`);
+  console.log(`${PAD}${style.dim(decisionReason)}`);
 
+  console.log(`\n${PAD}${style.bold('Observed evidence')}`);
+  for (const line of evidenceLines(evaluation.evidence)) console.log(`${PAD}${line}`);
+
+  for (const risk of summary.risks) console.log(`${PAD}${style.yellow(`! ${risk}`)}`);
   if (summary.body) {
     console.log(`\n${PAD}${style.dim(summary.body.label)}`);
     console.log(indent(numberLines(summary.body.text), PAD));
   }
-
   if (summary.fields.length === 0 && !summary.body) {
-    console.log(style.dim(indent(preview(call.args, 1200), PAD)));
+    console.log(style.dim(indent(preview(invocation.arguments, 1200), PAD)));
   }
-
   console.log('');
 }
 

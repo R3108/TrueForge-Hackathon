@@ -32,6 +32,10 @@ export type PerimeterVerdict =
  * walk straight out.
  */
 export function normalizePath(path: string): string | undefined {
+  // Repository paths must be relative. Normalizing an absolute path by merely
+  // dropping its root would turn an unsafe input into an apparently safe one.
+  if (/^(?:[a-z]:[\\/]|[\\/]{1,2})/i.test(path)) return undefined;
+
   const segments = path.replace(/\\/g, '/').split('/');
   const out: string[] = [];
 
