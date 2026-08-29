@@ -22,7 +22,7 @@ The agent can write to `cart-service` and **cannot** write to the harness — di
 
 - **Node 22.14 or newer.** Check with `node -v`. If it's older, install from [nodejs.org](https://nodejs.org).
 - **An OpenAI API key** (or Anthropic/Gemini). This is the one thing that costs money. A full demo run is cents, not dollars.
-- **A GitHub personal access token** with `repo` scope → [github.com/settings/tokens](https://github.com/settings/tokens). Fine-grained is fine; it needs write access to `R3108/cart-service` only.
+- **A fine-grained GitHub personal access token, restricted to `R3108/cart-service` only** → [github.com/settings/personal-access-tokens/new](https://github.com/settings/personal-access-tokens/new). Under "Repository access" choose *Only select repositories* → `R3108/cart-service`; grant *Contents: Read and write* and *Pull requests: Read and write*. Do **not** use a classic PAT with `repo` scope: it can reach every repository you can, including this harness, and the whole safety claim — "the agent cannot reach the gate that governs it" — rests on the token not containing this repository.
 - **A free Sentry account** → [sentry.io](https://sentry.io).
 
 ### 1.2 Start TrueForge
@@ -53,7 +53,7 @@ Copy the exact string (e.g. `openai/gpt-5-6-terra`, not `gpt-5.6`). You'll need 
 
 | Name | URL | Auth |
 | --- | --- | --- |
-| `github` | `https://api.githubcopilot.com/mcp/` | Header: `Authorization: Bearer <your GitHub PAT>` |
+| `github` | `https://api.githubcopilot.com/mcp/` | Header: `Authorization: Bearer <your fine-grained PAT, scoped to R3108/cart-service only>` |
 | `sentry` | `https://mcp.sentry.dev/mcp` | Click Connect, authorize in the popup |
 
 **Settings → Sandbox.** Configure a sandbox provider (Daytona). The agent needs this to reproduce the bug — without it, stage 3 cannot run and there is no demo.
