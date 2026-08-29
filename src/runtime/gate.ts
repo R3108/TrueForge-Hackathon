@@ -8,7 +8,7 @@ import type {
   ToolAttemptRecord,
   ToolInvocation,
 } from './contracts.ts';
-import { normalizePath, isInsidePerimeter } from './perimeter.ts';
+import { normalizePath, compilePerimeter, judgePath } from './perimeter.ts';
 import type { EvidenceLedger, EvidenceSummary } from './evidence.ts';
 
 export interface FirewallPolicy {
@@ -508,6 +508,7 @@ export class ToolCallGate {
         'Submit a new call with every repository-relative write path.',
       );
     }
+    const rules = compilePerimeter(this.#policy.writePaths);
     for (const path of paths) {
       if (isAbsolutePath(path) || !normalizePath(path)) {
         return {
@@ -523,10 +524,15 @@ export class ToolCallGate {
           reason: `Path ${path} is credential-sensitive and cannot be approved.`,
         };
       }
-      if (
-        this.#policy.writePaths.length === 0 ||
-        !isInsidePerimeter(path, this.#policy.writePaths)
-      ) {
+      const verdict = judgePath(path, rules);
+      if (verdict.status === 'excluded') {
+        return {
+          type: 'deny',
+          code: 'outside_write_perimeter',
+          reason: `Path ${path} is excluded by !${verdict.pattern}, so it is outside the declared write perimeter.`,
+        };
+      }
+      if (verdict.status === 'outside' || this.#policy.writePaths.length === 0) {
         return {
           type: 'deny',
           code: 'outside_write_perimeter',

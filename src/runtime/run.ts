@@ -3,6 +3,8 @@ import { style, preview, summarizeInline } from './render.ts';
 import { requestClearance, requestResponses } from './approvals.ts';
 import { EvidenceLedger, type EvidenceSummary, type TestEvidencePolicy } from './evidence.ts';
 import { ToolCallGate, type FirewallPolicy } from './gate.ts';
+import type { SecretPolicy } from './secrets.ts';
+import type { Journal } from './journal.ts';
 import type { PendingAction, ToolInvocation } from './contracts.ts';
 import {
   requiredActionIdentity,
@@ -47,6 +49,12 @@ export interface IncidentPolicy extends FirewallPolicy, TestEvidencePolicy {
   kernel?: KernelPolicy;
   /** Optional consumer of informational kernel blocks. */
   onKernelInfo?: KernelInfoSink;
+  /** What to do about a credential in a payload. Default: block. */
+  secretPolicy?: SecretPolicy;
+  /** Refuse every write without asking - a full run with nothing at stake. */
+  rehearse?: boolean;
+  /** Append-only record of what was decided. */
+  journal?: Journal;
 }
 
 export interface IncidentResult {
@@ -168,7 +176,11 @@ export async function runIncident(
       kernel.recordState({ type: 'phase_changed', phase: 'blocked' });
       emitInfo(renderPhaseAndPlan(kernel.workingState()));
     }
-    const approvalDecisions = await requestClearance(approvals, gate);
+    const approvalDecisions = await requestClearance(approvals, gate, {
+    secretPolicy: policy.secretPolicy,
+    rehearse: policy.rehearse,
+    journal: policy.journal,
+  });
     const responseDecisions = await requestResponses(responses, gate);
     input = orderContinuationInputs(result.pending, approvalDecisions, responseDecisions);
     if (kernel && contract && !contract.bypassed) {
