@@ -25,6 +25,16 @@ describe('canonical argument owner', () => {
     // A malformed string fingerprints the raw value; identical raw values match.
     expect(canonicalArgumentFingerprint('{bad')).toBe(canonicalArgumentFingerprint('{bad'));
   });
+
+  it('fingerprints omitted arguments deterministically instead of throwing', () => {
+    // `JSON.stringify(undefined)` is `undefined`, which `Hash.update` rejects;
+    // a call with no arguments at all must still fingerprint and compare.
+    expect(canonicalizeArguments(undefined)).toBe('undefined');
+    expect(canonicalArgumentFingerprint(undefined)).toBe(
+      canonicalArgumentFingerprint(undefined),
+    );
+    expect(fingerprintArguments(undefined)).toMatch(/^[0-9a-f]{64}$/);
+  });
 });
 
 describe('selector policy version', () => {

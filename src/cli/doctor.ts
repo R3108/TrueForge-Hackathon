@@ -147,6 +147,16 @@ async function checkGateDrift(client: TrueForge, config: Config): Promise<string
     throw new Error(`the saved agent has no "${config.connectors.github}" connector attached`);
   }
 
+  // The runtime gate binds GitHub policy to the connector's stable server id,
+  // which the agent manifest does not carry. A stale LTP_CONNECTOR_GITHUB_ID
+  // means every write is denied as untrusted_tool_origin with the gate otherwise
+  // green, so the check at least names the symptom instead of staying silent.
+  console.log(
+    `  ${style.yellow('NOTE')} LTP_CONNECTOR_GITHUB_ID (${config.connectors.githubId}) is verified at ` +
+      `dispatch: if every GitHub write is denied as untrusted_tool_origin, re-run a turn and ` +
+      `copy the fresh toolInfo serverId from the stream.`,
+  );
+
   const gate = github.requireApprovalForTools ?? [];
   const sentry = servers.find((server) => server.name === config.connectors.sentry);
   const sentryReadOnly = (sentry?.enableTools ?? []).includes('@read-only');
@@ -219,7 +229,15 @@ export function checkPerimeterConfig(config: Config): string {
  * not that it is *authorized*. The worst time to learn the GitHub header token
  * has expired is when dispatch dies with `mcp.auth_required` on camera, so this
  * asks the server's settings projection - which carries a nested `auth_status`
- * per server - for the real state of both configured connectors.
+ * per server - for the real state of both configured connectors, and then does
+ * one live `tools/list` round-trip through the GitHub connector, which is what
+ * actually exercises the stored credential.
+ *
+ * The runtime gate additionally binds policy to the connector's *stable server
+ * id* (LTP_CONNECTOR_GITHUB_ID). The settings projection exposes names and auth
+ * state but not that id, so doctor cannot prove the configured value is current
+ * from here - it says so, with the symptom a stale id produces, rather than
+ * print a green line over an unverified identity.
  */
 async function checkConnectorAuth(client: TrueForge, config: Config): Promise<string> {
   let servers: TrueForgeApi.ConfiguredMcpServer[];
@@ -240,7 +258,23 @@ async function checkConnectorAuth(client: TrueForge, config: Config): Promise<st
     throw error;
   }
 
-  return connectorAuthVerdict(servers, [config.connectors.github, config.connectors.sentry]);
+  const verdict = connectorAuthVerdict(servers, [
+    config.connectors.github,
+    config.connectors.sentry,
+  ]);
+
+  // A live tools/list through the GitHub connector: the settings projection
+  // says what the server *believes* about the credential; this uses it. A
+  // revoked or wrong header token fails here, before an incident depends on it.
+  const { data: githubTools } = await client.mcpServers.listTools(config.connectors.github);
+  if (!Array.isArray(githubTools) || githubTools.length === 0) {
+    throw new Error(
+      `the "${config.connectors.github}" connector returned no tools from a live tools/list - ` +
+        `its credential may be invalid even though the settings projection reports it authorized`,
+    );
+  }
+
+  return `${verdict}; ${githubTools.length} GitHub tools live`;
 }
 
 /**

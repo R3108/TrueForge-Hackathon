@@ -247,6 +247,41 @@ describe('required action handling', () => {
     assert.doesNotMatch(reasonOf(decisions[0]), new RegExp(token), 'never echo the secret back');
   });
 
+  test('a human_review call cannot bypass the tripwire with a secret in its payload', async () => {
+    stdin.isTTY = true;
+
+    // create_pull_request with requireTestEvidence and no evidence is exactly
+    // what routes the gate to human_review - the path that used to skip the
+    // scan. The secret rides in the PR body, which is persisted in the repo.
+    const token = `ghp_${'a1B2c3D4e5F6g7H8i9J0'}${'kLmNoPqRsTuVwXyZ0123'}`;
+    const reviewGate = new ToolCallGate(
+      { ...policy, requireTestEvidence: true },
+      new EvidenceLedger(),
+      Buffer.alloc(32, 7),
+    );
+
+    const decisions = await requestClearance(
+      [
+        approval({
+          toolName: 'create_pull_request',
+          arguments: {
+            owner: 'truefoundry',
+            repo: 'example',
+            title: 'Fix null deref',
+            head: 'fix/cart',
+            base: 'main',
+            body: `Works on my machine. Token: ${token}`,
+          },
+        }),
+      ],
+      reviewGate,
+    );
+
+    assert.equal(decisions[0]?.approval.status, 'deny');
+    assert.match(reasonOf(decisions[0]), /tripwire/i);
+    assert.doesNotMatch(reasonOf(decisions[0]), new RegExp(token), 'never echo the secret back');
+  });
+
   test('lets a credential through to the human when the policy says warn', async () => {
     stdin.isTTY = false; // denied for lack of a TTY, not by the tripwire
 

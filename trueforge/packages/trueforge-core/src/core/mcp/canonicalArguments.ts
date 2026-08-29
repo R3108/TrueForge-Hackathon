@@ -36,8 +36,14 @@ function isRecord(value: unknown): value is Record<string, unknown> {
  * break cross-process/replay binding comparison. Code-unit ordering is total and locale-invariant.
  */
 export function canonicalizeArguments(value: unknown): string {
+  // `JSON.stringify(undefined)` is `undefined` (not a string), which would be
+  // rejected by `Hash.update` below; a missing argument value must still
+  // produce a deterministic fingerprint so failed decodes stay comparable.
+  if (value === undefined) {
+    return 'undefined';
+  }
   if (value === null || typeof value !== 'object') {
-    return JSON.stringify(value);
+    return JSON.stringify(value) ?? 'null';
   }
   if (Array.isArray(value)) {
     return `[${value.map(item => canonicalizeArguments(item)).join(',')}]`;

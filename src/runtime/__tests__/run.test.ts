@@ -195,4 +195,76 @@ describe('informational kernel display is additive and separate from required ac
     assert.equal(result.finalOutput, 'resolved');
     assert.equal(result.contract, undefined);
   });
+
+  test('a green evidence ledger completes harness-inferred criteria instead of always blocking', async () => {
+    // Regression: admission seeded every criterion as remaining and nothing
+    // ever emitted criterion_satisfied, so even a fully verified repair was
+    // rewritten as INCOMPLETE. The evidence projection must clear the
+    // harness-inferred criteria their typed evidence vouches for.
+    const targeted = 'npm test -- --test-name-pattern cart';
+    const fullSuite = 'npm test';
+    const execEvent = (callId: string, eventId: string, command: string, exitCode: number) => [
+      {
+        type: 'model.message',
+        id: eventId,
+        threadId: 'main',
+        toolCalls: [
+          {
+            id: callId,
+            function: { name: 'sandbox_exec', arguments: JSON.stringify({ command }) },
+            toolInfo: { type: 'truefoundry-system', serverId: 'trusted-host-id', serverName: 'trusted-host' },
+          },
+        ],
+      },
+      {
+        type: 'tool.response',
+        id: `response_${callId}`,
+        threadId: 'main',
+        toolCallId: callId,
+        executionFacts: { version: 1, status: exitCode === 0 ? 'succeeded' : 'failed', exitCode, timedOut: false },
+        content: 'tests passed',
+      },
+    ];
+
+    // A failing run first (regression observed), then the green targeted and
+    // full-suite runs - all through the trusted host producer.
+    const client = fakeClient([
+      { type: 'turn.created', id: 'created', turnId: 'turn_1' },
+      ...execEvent('exec_red', 'event_red', targeted, 1),
+      ...execEvent('exec_targeted', 'event_targeted', targeted, 0),
+      ...execEvent('exec_suite', 'event_suite', fullSuite, 0),
+      {
+        type: 'turn.done',
+        id: 'done',
+        state: {
+          status: 'done',
+          output: { content: 'Fixed. The failing test is green and the suite passes.' },
+          requiredActions: [],
+        },
+      },
+    ]);
+
+    const result = await runIncident(
+      client,
+      'session_1',
+      'Production incident: fix the null deref in cart.js',
+      {
+        ...policy,
+        requireTestEvidence: true,
+        targetedCommand: targeted,
+        fullSuiteCommand: fullSuite,
+        trustedExecutionTool: {
+          toolSetId: 'trusted-host-id',
+          toolSetName: 'trusted-host',
+          toolType: 'truefoundry-system',
+        },
+        kernel: { enabled: true, modelLimits: { contextWindow: 100_000, maxOutputTokens: 20_000 } },
+      },
+    );
+
+    assert.equal(result.evidence.regressionObserved, true);
+    assert.equal(result.evidence.targetedTestPassed, true);
+    assert.equal(result.evidence.fullSuitePassed, true);
+    assert.doesNotMatch(result.finalOutput, /INCOMPLETE/, 'green evidence must complete the task');
+  });
 });

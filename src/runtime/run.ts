@@ -144,6 +144,15 @@ export async function runIncident(
       let falseCompletionBlocked: boolean | undefined;
       if (kernel && contract) {
         const unknownWrites = gate.attempts.filter((a) => a.state === 'unknown').length;
+        // Project the ledger's verified facts into the kernel's working state
+        // BEFORE verification. Without this, no criterion can ever leave the
+        // remaining set: admission seeds them all, only criterion_satisfied
+        // events clear them, and nothing ever emitted those - so every action
+        // task was rewritten as incomplete even with a fully green evidence
+        // ledger. The mapping is evidence-driven, never prose-driven: each
+        // harness-inferred criterion is satisfied by exactly the typed
+        // evidence that vouches for it, at the current workspace epoch.
+        projectEvidenceIntoKernel(kernel, contract, evidence.summary());
         const decision = kernel.verify(finalOutput, evidence.summary(), 0, unknownWrites);
         verifiedOutput = decision.output;
         falseCompletionBlocked = decision.falseCompletionBlocked;
@@ -425,11 +434,17 @@ function outputContent(value: unknown): string {
   if (typeof content === 'string') return content;
   if (Array.isArray(content)) {
     return content
-      .map((item) => object(item)?.text)
-      .filter((item): item is string => typeof item === 'string')
+      .map((item) => {
+        const part = object(item);
+        // A refusal is content too: the SDK permits both a top-level refusal
+        // field on the message and refusal content parts. Dropping them turned
+        // a successful refusal-only turn into empty output.
+        return stringValue(part?.text) ?? stringValue(part?.refusal);
+      })
+      .filter((item): item is string => item !== undefined)
       .join('\n');
   }
-  return '';
+  return stringValue(output?.refusal) ?? '';
 }
 
 interface McpServerRef {
@@ -446,4 +461,47 @@ function mcpServersOf(event: StreamEvent): McpServerRef[] {
 
 function labelOf(server: McpServerRef): string {
   return server.name ?? server.id ?? '(unnamed)';
+}
+
+/**
+ * Map each harness-inferred acceptance criterion onto the typed evidence that
+ * vouches for it, then record satisfied criteria as working-state events.
+ * Evidence-driven only: prose never clears a criterion.
+ */
+function projectEvidenceIntoKernel(
+  kernel: AdaptiveAgentKernel,
+  contract: TaskContract,
+  evidence: EvidenceSummary,
+): void {
+  if (contract.bypassed) return;
+
+  kernel.recordState({
+    type: 'evidence_recorded',
+    kind: 'regression_failure',
+    atEpoch: evidence.workspaceEpoch,
+  });
+  if (evidence.regressionObserved && !evidence.regressionIsHistorical) {
+    kernel.recordState({
+      type: 'criterion_satisfied',
+      text: 'The reported failure is reproduced by a failing test.',
+    });
+  }
+  if (evidence.targetedTestPassed && evidence.fullSuitePassed) {
+    kernel.recordState({
+      type: 'criterion_satisfied',
+      text: 'The fix turns the failing test green without breaking the suite.',
+    });
+    kernel.recordState({
+      type: 'criterion_satisfied',
+      text: 'The new behavior is covered by a passing test.',
+    });
+    kernel.recordState({
+      type: 'criterion_satisfied',
+      text: 'Existing tests still pass after the refactor.',
+    });
+  }
+  // User-stated criteria are not implied by the generic evidence kinds; they
+  // clear only when the evidence ledger explicitly vouches for them, which
+  // today it has no way to express. Left in the remaining set, they surface as
+  // missing at the verification boundary - the honest outcome.
 }

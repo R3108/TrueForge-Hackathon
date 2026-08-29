@@ -138,15 +138,12 @@ export async function requestClearance(
       continue;
     }
 
-    if (evaluation.decision.type === 'human_review') {
-      // Incomplete evidence is a reason to involve the human, not to refuse:
-      // renderApprovalCard surfaces exactly what is missing.
-      reviewable.push({ call, evaluation, warnings: [] });
-      continue;
-    }
-
     // Payload tripwire: runs on every field that is persisted in the repository
-    // (file content, commit messages, PR/issue bodies, titles, branch names).
+    // (file content, commit messages, PR/issue bodies, titles, branch names) and
+    // on EVERY decision path that can still reach a human - human_review
+    // included. Incomplete evidence is a reason to involve the operator, not a
+    // licence to skip the scan: a secret-bearing PR body must be refused under
+    // secretPolicy 'block' before anyone can approve it.
     const findings =
       secretPolicy === 'off'
         ? []
@@ -158,6 +155,13 @@ export async function requestClearance(
         .join(', ')}. Remove the credential and read it from the environment instead. No human was asked.`;
       settle(call, 'blocked-secret', reason, evaluation.fingerprint);
       renderTripwire(call, findings);
+      continue;
+    }
+
+    if (evaluation.decision.type === 'human_review') {
+      // Incomplete evidence is a reason to involve the human, not to refuse:
+      // renderApprovalCard surfaces exactly what is missing.
+      reviewable.push({ call, evaluation, warnings: findings });
       continue;
     }
 
