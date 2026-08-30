@@ -235,6 +235,21 @@ function extractConstraints(brief: string, options: CompilerOptions): TaskConstr
   return dedupe(constraints);
 }
 
+/**
+ * Canonical texts of the harness-inferred acceptance criteria, one per action
+ * task type. Exported because TWO modules must agree on them byte-for-byte:
+ * this module seeds them into the contract, and the runtime's evidence
+ * projection (run.ts) clears them by exact text when their typed evidence
+ * arrives. Rewording one side without the other silently stops that criterion
+ * from ever clearing - so the texts live here, once, and both sides import.
+ */
+export const HARNESS_INFERRED_CRITERIA = {
+  regressionReproduced: 'The reported failure is reproduced by a failing test.',
+  fixTurnsTestGreen: 'The fix turns the failing test green without breaking the suite.',
+  featureCovered: 'The new behavior is covered by a passing test.',
+  refactorStillGreen: 'Existing tests still pass after the refactor.',
+} as const;
+
 function extractCriteria(brief: string, taskType: TaskType): AcceptanceCriterion[] {
   const criteria: AcceptanceCriterion[] = [];
   for (const match of brief.matchAll(EXPLICIT_CRITERIA)) {
@@ -243,13 +258,13 @@ function extractCriteria(brief: string, taskType: TaskType): AcceptanceCriterion
   }
   if (taskType === 'bug_fix') {
     criteria.push(
-      { id: localId('ac'), text: 'The reported failure is reproduced by a failing test.', provenance: 'harness-inferred' },
-      { id: localId('ac'), text: 'The fix turns the failing test green without breaking the suite.', provenance: 'harness-inferred' },
+      { id: localId('ac'), text: HARNESS_INFERRED_CRITERIA.regressionReproduced, provenance: 'harness-inferred' },
+      { id: localId('ac'), text: HARNESS_INFERRED_CRITERIA.fixTurnsTestGreen, provenance: 'harness-inferred' },
     );
   } else if (taskType === 'feature') {
-    criteria.push({ id: localId('ac'), text: 'The new behavior is covered by a passing test.', provenance: 'harness-inferred' });
+    criteria.push({ id: localId('ac'), text: HARNESS_INFERRED_CRITERIA.featureCovered, provenance: 'harness-inferred' });
   } else if (taskType === 'refactor') {
-    criteria.push({ id: localId('ac'), text: 'Existing tests still pass after the refactor.', provenance: 'harness-inferred' });
+    criteria.push({ id: localId('ac'), text: HARNESS_INFERRED_CRITERIA.refactorStillGreen, provenance: 'harness-inferred' });
   }
   return dedupe(criteria);
 }

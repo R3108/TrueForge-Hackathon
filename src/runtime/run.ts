@@ -16,6 +16,7 @@ import {
 import { AdaptiveAgentKernel, type KernelMetrics } from './kernel/index.ts';
 import type { ModelLimits } from './kernel/context.ts';
 import type { TaskContract } from './kernel/contract.ts';
+import { HARNESS_INFERRED_CRITERIA } from './kernel/contract.ts';
 import {
   renderBlock,
   renderTaskObjective,
@@ -485,14 +486,14 @@ function projectEvidenceIntoKernel(
     // record is the successful flow, not a reason to withhold the criterion.
     kernel.recordState({
       type: 'criterion_satisfied',
-      text: 'The reported failure is reproduced by a failing test.',
+      text: HARNESS_INFERRED_CRITERIA.regressionReproduced,
     });
   }
   if (evidence.targetedTestPassed && evidence.fullSuitePassed) {
     const satisfied: Record<string, string> = {
-      bug_fix: 'The fix turns the failing test green without breaking the suite.',
-      feature: 'The new behavior is covered by a passing test.',
-      refactor: 'Existing tests still pass after the refactor.',
+      bug_fix: HARNESS_INFERRED_CRITERIA.fixTurnsTestGreen,
+      feature: HARNESS_INFERRED_CRITERIA.featureCovered,
+      refactor: HARNESS_INFERRED_CRITERIA.refactorStillGreen,
     };
     const text = satisfied[contract.taskType];
     if (text) {
