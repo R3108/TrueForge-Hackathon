@@ -334,7 +334,25 @@ The agent lives in **one reviewable file**. `src/agent/spec.ts` is the entire de
 
 Every substantive change lands through a pull request reviewed by **[Qodo](https://www.qodo.ai/)**. No direct commits to `main`.
 
-<!-- TODO(before submission): link the representative merged PR here. -->
+**Representative merged PR: [#7 — Close the Qodo findings on #6 and land the verified tool-call firewall](https://github.com/R3108/TrueForge-Hackathon/pull/7).**
+
+It is the one worth reading, because Qodo found the bug that mattered most. A single model message can carry several tool calls, each with its own approval pause — and the client resolved every pause to the *first* call in the message. The perimeter checked one file, the credential tripwire scanned that same file, the operator was shown that same file, and the approval was routed to a different write entirely. Three independent controls, all inspecting the wrong object, all agreeing.
+
+That PR closes it at the root: calls are keyed by `(threadId, toolCallId)` and fingerprinted by their arguments, approval is bound to that fingerprint, and a pause that cannot be resolved fails closed instead of guessing. The rest of the firewall — origin binding, bounded repair, the circuit breaker, epoch-bound evidence — grew out of asking what else in the gate was true by accident.
+
+Every finding across [#3](https://github.com/R3108/TrueForge-Hackathon/pull/3), [#4](https://github.com/R3108/TrueForge-Hackathon/pull/4), [#5](https://github.com/R3108/TrueForge-Hackathon/pull/5), [#6](https://github.com/R3108/TrueForge-Hackathon/pull/6) and [#7](https://github.com/R3108/TrueForge-Hackathon/pull/7) is closed. The story is written up in [docs/BLOG.md](docs/BLOG.md).
+
+## Demo
+
+<!-- SUBMISSION: paste the unlisted YouTube link here, replacing this line. -->
+**Write-up:** [We built an agent that fixes production bugs. The hardest part was stopping it.](https://dev.to/sumit_kumardas_4cabf25dc/we-built-an-agent-that-fixes-production-bugs-the-hardest-part-was-stopping-it-2cce)
+
+Verify the safety model yourself, with no API key, no network and no accounts:
+
+```bash
+npm install
+npm run demo:firewall
+```
 
 ## Safety and scope
 
