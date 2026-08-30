@@ -279,7 +279,9 @@ Then configure and run Licence to Patch:
 #      Settings → Connectors  → add "sentry" and "github"
 #      Settings → Sandbox     → configure a sandbox provider
 
-# 5. Configure and provision the saved agent.
+# 5. Configure and provision the saved agent. Fill in the model, target repo,
+#    and the three stable tool identity values required by .env.example when
+#    LTP_REQUIRE_TEST_EVIDENCE=true; these are IDs, not credentials.
 Copy-Item .env.example .env   # fill in model, target repo, connector names
 npm install
 npm run doctor               # pre-flight: node version, server, agent

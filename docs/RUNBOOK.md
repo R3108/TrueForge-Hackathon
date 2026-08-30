@@ -106,12 +106,17 @@ npm install
 if (!(Test-Path .env)) { Copy-Item .env.example .env }
 ```
 
-Edit `.env` — only two lines usually need changing:
+Edit `.env`. The target and connector names already have the right defaults. Set the model and replace the three `replace-with-...` identity placeholders:
 
 ```
 LTP_MODEL=openai/gpt-5-6-terra        # the exact string from step 1.3
 LTP_TARGET_REPO=R3108/cart-service    # already correct
+LTP_EXECUTION_TOOL_ID=...             # TrueForge host sandbox toolInfo.serverId
+LTP_EXECUTION_TOOL_NAME=...           # TrueForge host sandbox toolInfo.serverName
+LTP_CONNECTOR_GITHUB_ID=...            # GitHub connector's stable serverId
 ```
+
+These three identity values are not credentials. They bind the evidence and GitHub policy to the exact TrueForge tools that produced them. If the file still contains `replace-with-...`, provision once and run a rehearsal, then copy the matching `serverId`/`serverName` from the TrueForge stream or tool details. If dispatch reports `untrusted_tool_origin`, the GitHub ID is stale; copy the fresh GitHub `serverId` and run again.
 
 ### 1.6 Provision and check
 
