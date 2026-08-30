@@ -148,7 +148,7 @@ export function buildAgentSpec(config: Config): TrueForgeApi.AgentSpec {
       contextManagement: {
         compaction: {
           enabled: true,
-          compactionThresholdTokens: 120000,
+          trigger: { type: 'input_tokens', value: 120000 },
         },
         largeToolResponse: { enabled: true },
       },

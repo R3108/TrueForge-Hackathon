@@ -346,8 +346,11 @@ Every finding across [#3](https://github.com/R3108/TrueForge-Hackathon/pull/3), 
 
 ## Demo
 
-<!-- SUBMISSION: paste the unlisted YouTube link here, replacing this line. -->
+**Video:** [Watch the Licence to Patch demonstration on YouTube](https://youtu.be/OB1_swcuIdY)
+
 **Write-up:** [We built an agent that fixes production bugs. The hardest part was stopping it.](https://dev.to/sumit_kumardas_4cabf25dc/we-built-an-agent-that-fixes-production-bugs-the-hardest-part-was-stopping-it-2cce)
+
+For the complete setup, recording script, and submission checklist, see [`docs/RUNBOOK.md`](docs/RUNBOOK.md).
 
 Verify the safety model yourself, with no API key, no network and no accounts:
 
