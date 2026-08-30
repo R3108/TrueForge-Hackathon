@@ -130,8 +130,6 @@ Three independent safety mechanisms, all inspecting the wrong object, all agreei
 
 Nothing in our test suite caught it, because every test we'd written used one tool call per message. The bug lived exactly in the gap between "the case we imagined" and "the case that happens".
 
-Nothing in our test suite caught it, because every test we'd written used one tool call per message. The bug lived exactly in the gap between "the case we imagined" and "the case that happens".
-
 That finding is the strongest argument we can make for automated review on agent code. We wrote the safety model, we believed in it, we tested it, and it had a hole you could drive a pull request through.
 
 ---
