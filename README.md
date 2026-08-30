@@ -282,10 +282,10 @@ Then configure and run Licence to Patch:
 # 5. Configure and provision the saved agent. Fill in the model, target repo,
 #    and the three stable tool identity values required by .env.example when
 #    LTP_REQUIRE_TEST_EVIDENCE=true; these are IDs, not credentials.
-Copy-Item .env.example .env   # fill in model, target repo, connector names
+if (!(Test-Path .env)) { Copy-Item .env.example .env } # fill in model, target repo, connector names
 npm install
-npm run doctor               # pre-flight: node version, server, agent
 npm run provision            # creates the agent from src/agent/spec.ts
+npm run doctor               # pre-flight: node version, server, agent, gate
 
 # 6. Dispatch an incident.
 npm run dispatch -- --rehearse PROJECT-4A2   # first time: refuse every write
