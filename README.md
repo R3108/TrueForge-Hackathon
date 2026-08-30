@@ -334,7 +334,16 @@ The agent lives in **one reviewable file**. `src/agent/spec.ts` is the entire de
 
 Every substantive change lands through a pull request reviewed by **[Qodo](https://www.qodo.ai/)**. No direct commits to `main`.
 
-<!-- TODO(before submission): link the representative merged PR here. -->
+[Representative merged PR #13](https://github.com/R3108/TrueForge-Hackathon/pull/13) demonstrates the reviewed firewall and final demo workflow.
+
+## Hackathon submission
+
+The project write-up and the recorded demonstration are available here:
+
+- **Field Report blog post:** [We built an agent that fixes production bugs. The hardest part was stopping it.](https://dev.to/sumit_kumardas_4cabf25dc/we-built-an-agent-that-fixes-production-bugs-the-hardest-part-was-stopping-it-2cce)
+- **Demo video:** [Watch the Licence to Patch demonstration on YouTube](https://youtu.be/OB1_swcuIdY)
+
+For the complete setup, recording script, and submission checklist, see [`docs/RUNBOOK.md`](docs/RUNBOOK.md).
 
 ## Safety and scope
 
