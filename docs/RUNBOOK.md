@@ -20,20 +20,23 @@ The agent can write to `cart-service` and **cannot** write to the harness — di
 
 ### 1.1 What you need before you start
 
-- **Node 22.14 or newer.** Check with `node -v`. If it's older, install from [nodejs.org](https://nodejs.org).
+- **Node 22.14 or newer, plus Corepack.** Check with `node -v` and `corepack --version`. If Node is older, install from [nodejs.org](https://nodejs.org).
 - **An OpenAI API key** (or Anthropic/Gemini). This is the one thing that costs money. A full demo run is cents, not dollars.
 - **A fine-grained GitHub personal access token, restricted to `R3108/cart-service` only** → [github.com/settings/personal-access-tokens/new](https://github.com/settings/personal-access-tokens/new). Under "Repository access" choose *Only select repositories* → `R3108/cart-service`; grant *Contents: Read and write* and *Pull requests: Read and write*. Do **not** use a classic PAT with `repo` scope: it can reach every repository you can, including this harness, and the whole safety claim — "the agent cannot reach the gate that governs it" — rests on the token not containing this repository.
 - **A free Sentry account** → [sentry.io](https://sentry.io).
 
-### 1.2 Start TrueForge
+### 1.2 Start the patched TrueForge that belongs to this repository
 
-In its own terminal, leave this running for the whole session:
+Run these commands from the root of this `TrueForge-Hackathon` repository:
 
-```bash
-npx @truefoundry/trueforge@latest
+```powershell
+npm run trueforge:install
+npm run trueforge:dev
 ```
 
-Open **http://localhost:8790**. First run takes a minute to download.
+Leave the second command running for the whole session. It starts the patched TrueForge source vendored in [`trueforge/`](../trueforge), so do not replace it with `npx @truefoundry/trueforge@latest` for this demo.
+
+Open the UI at **http://localhost:3000**. The API remains at **http://localhost:8790** (health check: **http://localhost:8790/healthz**). The first setup can take a few minutes because the pinned TrueForge dependencies and UI are prepared locally.
 
 ### 1.3 Configure TrueForge in the browser
 
@@ -44,7 +47,7 @@ Three things, all in the TrueForge UI:
 Then find the exact model name — the config needs the fully-qualified name and the dots become dashes:
 
 ```bash
-curl http://localhost:8790/api/v1/models
+curl.exe http://localhost:8790/api/v1/models
 ```
 
 Copy the exact string (e.g. `openai/gpt-5-6-terra`, not `gpt-5.6`). You'll need it in 1.5.
@@ -83,7 +86,7 @@ npm start
 In a second terminal, trigger the bug:
 
 ```bash
-curl -X POST http://localhost:3000/cart/quote \
+curl.exe -X POST http://localhost:3000/cart/quote \
   -H 'Content-Type: application/json' \
   -d '{"currency":"GBP"}'
 ```
@@ -96,11 +99,11 @@ In Sentry, open the issue and copy its **short ID** — it looks like `CART-SERV
 
 ### 1.5 Configure the harness
 
-```bash
+```powershell
 git clone https://github.com/R3108/TrueForge-Hackathon
 cd TrueForge-Hackathon
 npm install
-cp .env.example .env
+if (!(Test-Path .env)) { Copy-Item .env.example .env }
 ```
 
 Edit `.env` — only two lines usually need changing:
