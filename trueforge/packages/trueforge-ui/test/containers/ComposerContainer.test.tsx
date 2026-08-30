@@ -142,23 +142,15 @@ describe('ComposerContainer', () => {
     expect(onNew).toHaveBeenCalledTimes(1);
   });
 
-  it('inserts adaptive commands with keyboard navigation and clears active chips', async () => {
+  it('treats slash-prefixed text as ordinary composer input', () => {
     renderComposer();
     const input = screen.getByRole<HTMLTextAreaElement>('textbox', { name: 'Message input' });
 
-    fireEvent.change(input, { target: { value: '/g' } });
-    expect(screen.getByRole('menu', { name: 'Adaptive slash commands' })).toBeInTheDocument();
-    const goalItem = screen.getByRole('menuitem', { name: /\/goal <text>/ });
-    expect(goalItem).toBeInTheDocument();
+    fireEvent.change(input, { target: { value: '/goal Ship safely' } });
 
-    goalItem.focus();
-    fireEvent.keyDown(goalItem, { key: 'Enter' });
-    await waitFor(() => expect(input.value).toBe('/goal '));
-
-    fireEvent.change(input, { target: { value: '/goal Ship safely\nImplement it.' } });
-    expect(screen.getByRole('group', { name: 'Active adaptive controls' })).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: 'Clear /goal Ship safely' }));
-    await waitFor(() => expect(input.value).toBe('Implement it.'));
+    expect(input.value).toBe('/goal Ship safely');
+    expect(screen.queryByRole('button', { name: '/ Controls' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('menu', { name: 'Adaptive slash commands' })).not.toBeInTheDocument();
   });
 
   it('submits authoritative adaptive syntax unchanged on named agents', async () => {
@@ -174,7 +166,6 @@ describe('ComposerContainer', () => {
       </ShellModeProvider>,
     );
     const input = screen.getByRole<HTMLTextAreaElement>('textbox', { name: 'Message input' });
-    expect(screen.getByRole('button', { name: '/ Controls' })).toBeEnabled();
 
     const wireText = '/model provider/other\n/effort high\n/request Investigate\nRun diagnostics.';
     fireEvent.change(input, { target: { value: wireText } });

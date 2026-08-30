@@ -87,30 +87,11 @@ describe('draft composer sections', () => {
     expect(await screen.findByTitle('Select reasoning effort')).toHaveTextContent('high');
   });
 
-  it('shows configured web search as available and names the executable tool', async () => {
+  it('does not render a standalone web-search status beside the tools selector', () => {
     render(<DraftSections webSearch={{ enabled: true, provider: 'brave' }} />);
 
-    const status = await screen.findByRole('status', { name: 'Web search: available' });
-    fireEvent.focus(status);
-    expect(await screen.findByRole('tooltip')).toHaveTextContent(
-      'web_search is available via Brave for current information.',
-    );
-  });
-
-  it('shows the server reason when web search is unavailable', async () => {
-    render(<DraftSections webSearch={{ enabled: false, reason: 'Web search is not configured on this server.' }} />);
-
-    const status = await screen.findByRole('status', { name: 'Web search: unavailable' });
-    fireEvent.focus(status);
-    expect(await screen.findByRole('tooltip')).toHaveTextContent('Web search is not configured on this server.');
-  });
-
-  it('handles older servers with no web-search field', async () => {
-    render(<DraftSections />);
-
-    const status = await screen.findByRole('status', { name: 'Web search: unavailable' });
-    fireEvent.focus(status);
-    expect(await screen.findByRole('tooltip')).toHaveTextContent('does not report a configured provider');
+    expect(screen.getByRole('button', { name: 'Tools (3)' })).toBeInTheDocument();
+    expect(screen.queryByRole('status', { name: /Web search:/ })).not.toBeInTheDocument();
   });
 
   it('propagates disabled and running state to composed controls', async () => {
