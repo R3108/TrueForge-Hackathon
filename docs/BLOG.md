@@ -130,9 +130,58 @@ Three independent safety mechanisms, all inspecting the wrong object, all agreei
 
 Nothing in our test suite caught it, because every test we'd written used one tool call per message. The bug lived exactly in the gap between "the case we imagined" and "the case that happens".
 
-Calls are now matched by `tool_call_id`, and a pause that *can't* be matched is refused outright rather than guessed at — nothing downstream can vouch for arguments it doesn't have.
+Nothing in our test suite caught it, because every test we'd written used one tool call per message. The bug lived exactly in the gap between "the case we imagined" and "the case that happens".
 
 That finding is the strongest argument we can make for automated review on agent code. We wrote the safety model, we believed in it, we tested it, and it had a hole you could drive a pull request through.
+
+---
+
+## What we built instead of a patch
+
+The one-line fix was to match calls by `tool_call_id`. We did that, and then we stopped and asked a harder question: *how many other things in this gate are true by accident?*
+
+The answer was "several", so the gate became a **verified tool-call firewall** with five properties we could actually test:
+
+**Identity.** Every call is keyed by `(threadId, toolCallId)` and fingerprinted by its arguments. An approval is bound to *that* fingerprint. Change the arguments and the old approval is worthless — you get a new call ID and a fresh prompt. This is what closes the original bug at the root rather than at the lookup.
+
+**Origin.** GitHub policy binds to the connector's stable `serverId`, not its name. A same-named tool from any other origin is refused as untrusted. Names are suggestions; ids are identity.
+
+**Bounded repair.** When a call is malformed, the agent doesn't get a vague error — it gets a structured one:
+
+```json
+{"error":"tool_call_rejected","repairable":true,"code":"missing_required",
+ "field":"path","instruction":"Submit a new call with the required path field."}
+```
+
+It can fix and resubmit, but only twice. Which leads to the property we're happiest with:
+
+**A circuit breaker.** If the same fingerprint fails twice, the agent stops. No unbounded retry loop, no agent grinding against a boundary at 3am burning tokens. A boundary that can be retried forever is a rate limit, not a boundary.
+
+**Epoch-bound evidence.** "The tests passed" is a claim. The firewall only accepts it as *evidence* if it came from the host-owned execution tool, at the current workspace epoch. If the agent runs the suite and then edits a file, the epoch advances and the evidence goes stale — because it is. The approval card shows exactly what was observed and what wasn't.
+
+The whole thing runs offline, deterministically, in about two seconds:
+
+```
+$ npm run demo:firewall
+
+1. Exact correlation across parallel calls
+  ✓ pause for call B resolves to call B, never call A
+2. Enforced repository policy
+  ✓ wrong-repository call is blocked before human approval
+3. Bounded structured repair and fresh identity
+  ✓ corrected semantics use a new call ID and require fresh approval
+4. Structured, epoch-bound evidence
+  ✓ targeted test has a structured zero exit code at current epoch
+5. Evidence-aware one-shot approval checkpoint
+  ✓ publishing still pauses for explicit human approval
+6. Circuit breaker
+  ✓ second identical fingerprint stops; no unbounded retry loop
+  ✓ p95 local gate latency 0.13 ms
+
+Deterministic firewall demo passed. No external services were used.
+```
+
+No API key, no network, no Sentry. If you want to check whether our safety claims are real rather than aspirational, that command is the answer — and being able to say that is worth more than any amount of prose about how careful we were.
 
 ---
 
@@ -166,15 +215,19 @@ The third question — *is this the right fix?* — is the one only a person can
 
 **We'd want ingress redaction, not just egress.** We scan everything going *to* the repository. Nothing scans what comes *back* from a tool into the transcript, the logs, and the recorded demo. A credential in your terminal scrollback is a real leak.
 
+**Per-subagent model routing.** When the harness fans out, every subagent inherits the root model. Reading three call sites doesn't need the same model as designing a patch, and being able to route cheap work to a cheap model would cut cost substantially. TrueForge has no field for it today — another upstream contribution.
+
 **The journal proves integrity, not identity.** It detects an edited or reordered record. It doesn't attest to who was at the keyboard — that needs a key, and a key needs somewhere safe to live.
 
 ---
 
 ## The thing worth taking away
 
-The interesting engineering in agent safety isn't the model or the prompt. It's the boundary — where you put it, what it inspects, and which direction it fails in when something unexpected happens.
+The interesting engineering in agent safety isn't the model or the prompt. It's the boundary — where you put it, what it inspects, which direction it fails in, and whether an approval stays bound to the thing it approved.
 
 And it's worth having something adversarial read that boundary code, because you will be the last person to notice its holes. We had three safety mechanisms inspecting the wrong object and agreeing with each other. It took a reviewer with no stake in believing us to point that out.
+
+If you build one of these: write the test that runs your gate with *two* tool calls in one message. That's where ours broke, and we'd never have looked.
 
 ---
 
