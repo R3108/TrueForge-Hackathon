@@ -2,29 +2,70 @@ import { test, describe, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { stdin } from 'node:process';
 
-import { requestClearance, type PendingCall } from '../approvals.ts';
+import { requestClearance, requestResponses } from '../approvals.ts';
+import type { PendingApproval, PendingResponse, ToolInvocation } from '../contracts.ts';
+import { EvidenceLedger } from '../evidence.ts';
+import { ToolCallGate, type FirewallPolicy } from '../gate.ts';
 import { Journal } from '../journal.ts';
 
 /**
  * The safety claim of this project is that the agent cannot write to a
- * repository while nobody is watching. These tests hold that claim to account.
+ * repository while nobody is watching - and that what a human *is* shown is the
+ * exact call the decision binds to. These tests hold both claims to account.
  */
 
-const call = (overrides: Partial<PendingCall> = {}): PendingCall => ({
-  threadId: 'main',
-  toolCallId: 'call_1',
-  toolName: 'create_pull_request',
-  args: { title: 'Fix null deref in cart.ts' },
-  ...overrides,
-});
+const policy: FirewallPolicy = {
+  targetRepo: 'truefoundry/example',
+  baseBranch: 'main',
+  writePaths: ['src/**', '!.github/**'],
+  githubConnector: 'github',
+  githubConnectorId: 'github-id',
+  policyVersion: 'test-v1',
+  requireTestEvidence: false,
+};
 
-const reasonOf = (decision: { approval: unknown } | undefined): string =>
-  (decision?.approval as { reason?: string })?.reason ?? '';
+function gate(): ToolCallGate {
+  return new ToolCallGate(policy, new EvidenceLedger(), Buffer.alloc(32, 7));
+}
+
+function invocation(overrides: Partial<ToolInvocation> = {}): ToolInvocation {
+  return {
+    key: {
+      sessionId: 'session_1',
+      turnId: 'turn_1',
+      threadId: 'main',
+      toolCallId: 'call_1',
+    },
+    sourceEventId: 'event_1',
+    origin: 'agent',
+    toolSetId: 'github-id',
+    toolSetName: 'github',
+    toolType: 'mcp',
+    toolName: 'create_pull_request',
+    arguments: {
+      owner: 'truefoundry',
+      repo: 'example',
+      title: 'Fix null deref in cart.js',
+      head: 'fix/cart',
+      base: 'main',
+    },
+    policyVersion: 'test-v1',
+    validationViolations: [],
+    ...overrides,
+  };
+}
+
+function approval(overrides: Partial<ToolInvocation> = {}): PendingApproval {
+  return { kind: 'approval', actionId: 'action_1', invocation: invocation(overrides) };
+}
+
+const reasonOf = (decision: { approval?: unknown } | undefined): string =>
+  ((decision?.approval as { reason?: string })?.reason ?? '');
 
 /** In-memory journal: no `dir`, so nothing is written to disk. */
 const journal = (): Journal => new Journal({ sessionId: 'test', incident: 'TEST-1' });
 
-describe('requestClearance', () => {
+describe('required action handling', () => {
   let originalIsTTY: boolean | undefined;
 
   before(() => {
@@ -38,33 +79,33 @@ describe('requestClearance', () => {
   });
 
   test('returns no decisions when nothing is pending', async () => {
-    const decisions = await requestClearance([]);
-    assert.deepEqual(decisions, []);
+    assert.deepEqual(await requestClearance([], gate()), []);
   });
 
-  test('denies every pending write when there is no interactive terminal', async () => {
+  test('denies every reviewable write when there is no interactive terminal', async () => {
     stdin.isTTY = false;
+    const decisions = await requestClearance(
+      [
+        approval(),
+        approval({ key: { ...invocation().key, toolCallId: 'call_b', threadId: 'sub_7f2a' } }),
+      ],
+      gate(),
+    );
 
-    const decisions = await requestClearance([
-      call({ toolCallId: 'call_a', toolName: 'create_branch' }),
-      call({ toolCallId: 'call_b', toolName: 'create_pull_request' }),
-    ]);
-
-    assert.equal(decisions.length, 2, 'every pending call must be answered');
-    for (const decision of decisions) {
-      assert.equal(decision.type, 'user.tool_approval');
-      assert.equal(
-        decision.approval.status,
-        'deny',
-        'an unattended session must never auto-approve a repository write',
-      );
-    }
+    assert.equal(decisions.length, 2);
+    assert.deepEqual(
+      decisions.map((decision) => [decision.toolCallId, decision.threadId, decision.approval.status]),
+      [
+        ['call_1', 'main', 'deny'],
+        ['call_b', 'sub_7f2a', 'deny'],
+      ],
+    );
   });
 
   test('gives the agent a reason when it denies, so it can explain itself', async () => {
     stdin.isTTY = false;
 
-    const [decision] = await requestClearance([call()]);
+    const [decision] = await requestClearance([approval()], gate());
     assert.ok(decision, 'expected a decision');
     assert.equal(decision.approval.status, 'deny');
     assert.match(
@@ -74,22 +115,26 @@ describe('requestClearance', () => {
     );
   });
 
-  test('denies a write outside the perimeter without asking a human', async () => {
-    // A TTY is present, so the only reason this can be denied is the perimeter.
+  test('blocks a write outside the perimeter before asking a human', async () => {
     stdin.isTTY = true;
-
     const decisions = await requestClearance(
-      [call({ toolName: 'create_or_update_file', args: { path: '.github/workflows/ci.yml' } })],
-      { writePaths: ['src/**', '!.github/**'] },
+      [
+        approval({
+          toolName: 'create_or_update_file',
+          arguments: {
+            owner: 'truefoundry',
+            repo: 'example',
+            branch: 'fix/cart',
+            path: '.github/workflows/ci.yml',
+            content: 'on: push',
+          },
+        }),
+      ],
+      gate(),
     );
 
-    assert.equal(decisions.length, 1);
     assert.equal(decisions[0]?.approval.status, 'deny');
-    assert.match(
-      reasonOf(decisions[0]),
-      /perimeter/i,
-      'the agent should be told which boundary it hit',
-    );
+    assert.match(reasonOf(decisions[0]), /perimeter/i);
   });
 
   test('names the exclusion when one refused the write', async () => {
@@ -97,12 +142,18 @@ describe('requestClearance', () => {
 
     const decisions = await requestClearance(
       [
-        call({
+        approval({
           toolName: 'create_or_update_file',
-          args: { path: '.github/workflows/ci.yml', content: 'on: push' },
+          arguments: {
+            owner: 'truefoundry',
+            repo: 'example',
+            branch: 'fix/cart',
+            path: '.github/workflows/ci.yml',
+            content: 'on: push',
+          },
         }),
       ],
-      { writePaths: ['src/**', '!.github/**'] },
+      gate(),
     );
 
     assert.match(reasonOf(decisions[0]), /excluded by !\.github/);
@@ -113,10 +164,30 @@ describe('requestClearance', () => {
 
     const decisions = await requestClearance(
       [
-        call({ toolCallId: 'inside', args: { path: 'src/cart.js' } }),
-        call({ toolCallId: 'outside', args: { path: '.github/workflows/ci.yml' } }),
+        approval({
+          key: { ...invocation().key, toolCallId: 'inside' },
+          toolName: 'create_or_update_file',
+          arguments: {
+            owner: 'truefoundry',
+            repo: 'example',
+            branch: 'fix/cart',
+            path: 'src/cart.js',
+            content: '// fix',
+          },
+        }),
+        approval({
+          key: { ...invocation().key, toolCallId: 'outside' },
+          toolName: 'create_or_update_file',
+          arguments: {
+            owner: 'truefoundry',
+            repo: 'example',
+            branch: 'fix/cart',
+            path: '.github/workflows/ci.yml',
+            content: 'on: push',
+          },
+        }),
       ],
-      { writePaths: ['src/**', '!.github/**'] },
+      gate(),
     );
 
     assert.equal(decisions.length, 2, 'every call must still be answered');
@@ -128,10 +199,15 @@ describe('requestClearance', () => {
   test('answers each pending call with its own id, not a shared one', async () => {
     stdin.isTTY = false;
 
-    const decisions = await requestClearance([
-      call({ toolCallId: 'call_a', threadId: 'main' }),
-      call({ toolCallId: 'call_b', threadId: 'sub_7f2a' }),
-    ]);
+    const decisions = await requestClearance(
+      [
+        approval({ key: { ...invocation().key, toolCallId: 'call_a' } }),
+        approval({
+          key: { ...invocation().key, toolCallId: 'call_b', threadId: 'sub_7f2a' },
+        }),
+      ],
+      gate(),
+    );
 
     assert.deepEqual(
       decisions.map((d) => [d.toolCallId, d.threadId]),
@@ -152,12 +228,53 @@ describe('requestClearance', () => {
 
     const decisions = await requestClearance(
       [
-        call({
+        approval({
           toolName: 'create_or_update_file',
-          args: { path: 'src/client.js', content: `const auth = "${token}";` },
+          arguments: {
+            owner: 'truefoundry',
+            repo: 'example',
+            branch: 'fix/cart',
+            path: 'src/client.js',
+            content: `const auth = "${token}";`,
+          },
         }),
       ],
-      { writePaths: ['src/**'] },
+      gate(),
+    );
+
+    assert.equal(decisions[0]?.approval.status, 'deny');
+    assert.match(reasonOf(decisions[0]), /tripwire/i);
+    assert.doesNotMatch(reasonOf(decisions[0]), new RegExp(token), 'never echo the secret back');
+  });
+
+  test('a human_review call cannot bypass the tripwire with a secret in its payload', async () => {
+    stdin.isTTY = true;
+
+    // create_pull_request with requireTestEvidence and no evidence is exactly
+    // what routes the gate to human_review - the path that used to skip the
+    // scan. The secret rides in the PR body, which is persisted in the repo.
+    const token = `ghp_${'a1B2c3D4e5F6g7H8i9J0'}${'kLmNoPqRsTuVwXyZ0123'}`;
+    const reviewGate = new ToolCallGate(
+      { ...policy, requireTestEvidence: true },
+      new EvidenceLedger(),
+      Buffer.alloc(32, 7),
+    );
+
+    const decisions = await requestClearance(
+      [
+        approval({
+          toolName: 'create_pull_request',
+          arguments: {
+            owner: 'truefoundry',
+            repo: 'example',
+            title: 'Fix null deref',
+            head: 'fix/cart',
+            base: 'main',
+            body: `Works on my machine. Token: ${token}`,
+          },
+        }),
+      ],
+      reviewGate,
     );
 
     assert.equal(decisions[0]?.approval.status, 'deny');
@@ -170,8 +287,20 @@ describe('requestClearance', () => {
 
     const token = `ghp_${'a1B2c3D4e5F6g7H8i9J0'}${'kLmNoPqRsTuVwXyZ0123'}`;
     const decisions = await requestClearance(
-      [call({ toolName: 'create_or_update_file', args: { path: 'src/a.js', content: token } })],
-      { writePaths: ['src/**'], secretPolicy: 'warn' },
+      [
+        approval({
+          toolName: 'create_or_update_file',
+          arguments: {
+            owner: 'truefoundry',
+            repo: 'example',
+            branch: 'fix/cart',
+            path: 'src/a.js',
+            content: token,
+          },
+        }),
+      ],
+      gate(),
+      { secretPolicy: 'warn' },
     );
 
     assert.match(reasonOf(decisions[0]), /non-interactive/i);
@@ -180,10 +309,7 @@ describe('requestClearance', () => {
   test('a rehearsal refuses every write even with a human at the terminal', async () => {
     stdin.isTTY = true;
 
-    const decisions = await requestClearance(
-      [call({ toolName: 'create_pull_request', args: { title: 'Fix' } })],
-      { rehearse: true },
-    );
+    const decisions = await requestClearance([approval()], gate(), { rehearse: true });
 
     assert.equal(decisions[0]?.approval.status, 'deny');
     assert.match(reasonOf(decisions[0]), /rehearsal/i);
@@ -195,10 +321,31 @@ describe('requestClearance', () => {
 
     await requestClearance(
       [
-        call({ toolCallId: 'a', args: { path: '.github/workflows/ci.yml' } }),
-        call({ toolCallId: 'b', args: { path: 'src/cart.js' } }),
+        approval({
+          key: { ...invocation().key, toolCallId: 'a' },
+          toolName: 'create_or_update_file',
+          arguments: {
+            owner: 'truefoundry',
+            repo: 'example',
+            branch: 'fix/cart',
+            path: '.github/workflows/ci.yml',
+            content: 'on: push',
+          },
+        }),
+        approval({
+          key: { ...invocation().key, toolCallId: 'b' },
+          toolName: 'create_or_update_file',
+          arguments: {
+            owner: 'truefoundry',
+            repo: 'example',
+            branch: 'fix/cart',
+            path: 'src/cart.js',
+            content: '// fix',
+          },
+        }),
       ],
-      { writePaths: ['src/**', '!.github/**'], journal: log },
+      gate(),
+      { journal: log },
     );
 
     assert.deepEqual(
@@ -209,5 +356,19 @@ describe('requestClearance', () => {
       ],
       'the record has to distinguish "nobody was asked" from "nobody was there"',
     );
+  });
+
+  test('uses user.tool_response for response-required actions', async () => {
+    stdin.isTTY = false;
+    const pending: PendingResponse = {
+      kind: 'response',
+      actionId: 'response_1',
+      invocation: invocation({ origin: 'client', toolName: 'ask_user' }),
+    };
+
+    const [decision] = await requestResponses([pending]);
+    assert.equal(decision?.type, 'user.tool_response');
+    assert.equal(decision?.toolCallId, 'call_1');
+    assert.match(decision?.content ?? '', /human_response_unavailable/);
   });
 });

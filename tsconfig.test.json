@@ -1,0 +1,10 @@
+{
+  // Typechecks the source plus the kernel tests under packages/trueforge-core.
+  // Kept separate from tsconfig.json so the emitting build keeps its src rootDir.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "rootDir": ".",
+    "noEmit": true
+  },
+  "include": ["src/**/*.ts", "packages/trueforge-core/tests/**/*.ts"]
+}

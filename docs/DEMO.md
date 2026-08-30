@@ -1,73 +1,92 @@
-# Three-minute demo script
+# Four-minute verified-firewall demo
 
-Submission requires a 3:00 video. Presentation is one of six equally-weighted judging criteria, so this is worth rehearsing — not improvising.
+The primary demo is deterministic and independent of TrueForge, GitHub, Sentry, and Daytona availability:
 
-## Before you record
+```powershell
+npm install
+npm run demo:firewall
+```
 
-- [ ] `npm run doctor` passes
-- [ ] TrueForge chat UI open at `http://localhost:8790`, browser zoom ~125%
-- [ ] A real, seeded bug in the target repo with a matching Sentry issue
-- [ ] Terminal font large enough to read at 720p
-- [ ] Qodo installed on the repo, so its review lands on camera
-- [ ] Do one full dry run — `npm run dispatch -- --rehearse <issue-id>` refuses every write, so the rehearsal costs you nothing and the first run always finds something
+A live `npm run dispatch -- <incident>` run is optional. Do not substitute live luck for the deterministic safety proof.
+
+## Before recording
+
+- [ ] `npm run typecheck` passes
+- [ ] `npm test` passes
+- [ ] `npm run demo:firewall` passes
+- [ ] Terminal font is readable at 720p
+- [ ] `docs/ARCHITECTURE.md` is open at the production coordinator diagram
+- [ ] If showing a live run, `npm run doctor` also passes, the TrueForge chat UI is
+      open at `http://localhost:8790`, a real seeded bug exists in the target repo
+      with a matching Sentry issue, and Qodo is installed on the repo
+- [ ] Do one full dry run — `npm run dispatch -- --rehearse <issue-id>` refuses every
+      write, so the rehearsal costs you nothing and the first run always finds something
 
 ## The cut
 
-**0:00–0:20 — The problem, stated once**
+**0:00–0:25 — Make the claim precise**
 
-> "It's 3am. Sentry fires. The stack trace is right there, the fix is four lines — and someone still has to wake up and do it. The tools that automate this either just suggest a patch, or they push to your repo while you're asleep."
+> "Retries, hooks, and JSON schema validation are not individually new. The claim is that TrueForge can turn a malformed or policy-invalid tool call into a corrected, independently approved action—while proving stale approvals, unsafe retries, and repeated loops cannot bypass policy."
 
-Show the Sentry issue on screen. Real error, real stack trace.
+Run `npm run demo:firewall`.
 
-**0:20–0:35 — The claim**
+**0:25–0:55 — Exact parallel-call correlation**
 
-> "Licence to Patch does the whole job autonomously — and physically cannot touch your repository without you. Built on TrueForge."
+Show calls A and B and the required action naming B.
 
-Show `src/agent/spec.ts`, scrolled to `requireApprovalForTools`. Ten tool names. Don't read them out; let them sit on screen while you talk.
+> "The old client selected the first call in a model message. A pause for B could display A while routing the decision under B's ID. The resolver now follows every source-event reference and exact call ID. Missing or ambiguous references fail closed."
 
-**0:35–1:45 — The run**
+Pause on the green line confirming B resolved to B.
 
-Run `npm run dispatch -- <issue-id>`. Narrate what's happening as it streams — don't narrate what you're typing.
+**0:55–1:20 — Enforced policy, not prompt advice**
 
-Land these four beats:
+Show the wrong-repository fixture being denied.
 
-1. *"It's reading the actual source at the culprit frame — not guessing from the stack trace."*
-2. **The reproduction.** Slow down here. *"This is the part that matters. Before it writes any fix, it writes a failing test — and runs it in a sandbox that has never seen a GitHub token."* Show the test going red.
-3. *"Now the fix. Same test, green. Full suite, green."*
-4. Cut to the TrueForge UI mid-run for two seconds — subagents fanned out, the incident card rendered. Shows the harness working.
+> "The target repository, repository-relative path, write perimeter, secret paths, protected branch, and destructive-operation rules are checked against actual arguments. A plausible prompt cannot authorize a different repository."
 
-**1:45–2:20 — The gate**
+**1:20–2:00 — Bounded structured repair**
 
-The terminal stops. `CLEARANCE REQUIRED`. Let the pause breathe for a full second before you speak.
+Show the malformed file call with no path and its JSON feedback. Point out the original and corrected IDs.
 
-> "Here's the whole point. It wants to create a pull request. It stops. And it's not showing me a summary it wrote about what it's going to do — that's the literal argument to `create_pull_request`. What I approve is exactly what runs."
+> "The gate does not silently fix or replay the call. It emits bounded, field-specific feedback. The model must issue a new call. New semantics mean a new fingerprint and fresh human approval. An identical invalid fingerprint stops on its second occurrence."
 
-**Deny it first.** Type `n`, give a reason.
+**2:00–2:45 — Verified evidence and approval identity**
 
-> "If I say no, it takes the no."
+Show the regression, workspace mutation, targeted pass, and full-suite pass. Then pause on the rendered approval card.
 
-Show the agent accepting the denial and explaining what it would need. This is the strongest fifteen seconds in the video — nobody else's demo will do it, and it proves the gate is real rather than decorative.
+> "A green badge requires a recognized test command, exact response correlation, completion without timeout, and a structured zero exit code. The workspace mutation advances the epoch, invalidating older current-state evidence. The historical red baseline remains labeled historical; current targeted and full-suite passes are bound to epoch one."
 
-Then re-run and approve.
+Point to call ID, fingerprint, repair budget, repository, branch, and evidence rows.
 
-**2:20–2:50 — The result**
+> "This card informs the decision; it never replaces TrueForge's required human approval. Approval is one-shot and bound to session, turn, thread, call ID, fingerprint, and policy version."
 
-The PR on GitHub. Scroll the body: Sentry link, root cause, the diff, test evidence, blast radius, how-to-verify.
+**2:45–3:15 — Replay and loop stopping**
 
-Then Qodo's review appears on it.
+Show the circuit-breaker and offline metric lines.
 
-> "Agent opens the PR. Qodo reviews it. A human approved the one step that touches the repo."
+> "Duplicate required-action events replay the recorded decision without another prompt. Human denial terminates the repair chain. Repeated fingerprints and the two-attempt repair budget stop model loops; the whole continuation is also capped at twelve turns."
 
-If you have three spare seconds, cut back to the terminal at the end of the run: the decision table, the audit digest, `npm run journal` verifying the chain. *"And there's a record of it — the denial, the approval, and a digest that changes if anyone edits the file."* Only if it fits; the denial is worth more.
+**3:15–3:50 — Production boundary**
 
-**2:50–3:00 — Close**
+Show the `ToolExecutionCoordinator` diagram in `docs/ARCHITECTURE.md`.
 
-> "Full autonomy up to the repository boundary. A hard stop at it. That's the licence."
+> "This hackathon client controls Licence to Patch's required-action boundary. It does not pretend to intercept a call TrueForge core already allowed. Production closes that boundary by making one coordinator the only path to remote MCP, local and system tools, sandbox execution, client tools, deferred tools, and nested Code Mode calls. Interceptors can tighten core policy, never weaken it."
 
-## Notes
+Mention typed outcomes and reconciliation:
 
-- **Record the denial.** It is the single most differentiating moment available to you.
-- **Don't narrate your typing.** Narrate what the agent is doing.
-- **Don't explain TrueForge's architecture on camera.** Show it working; the README explains it.
-- **Cut dead air ruthlessly.** Sandbox provisioning and test runs are slow — speed-ramp them, but never speed-ramp the approval pause.
-- If a stage fails on camera, keep it and say so. Judges score honesty higher than a suspiciously perfect run, and a fake demo is easy to spot.
+> "A timeout after a remote write is unknown, not failed. The coordinator reconciles idempotent or queryable writes and never blindly retries an ambiguous destructive write. Attempts and approvals use TrueForge's existing SQLite/Postgres session store."
+
+**3:50–4:00 — Close**
+
+> "Malformed call, precise repair, fresh human approval, current evidence, deterministic loop stopping—and a concrete path to comprehensive core interception."
+
+If you have three spare seconds, cut back to the terminal at the end of a live run: the decision table, the audit digest, `npm run journal` verifying the chain. *"And there's a record of it — the denial, the approval, and a digest that changes if anyone edits the file."* Only if it fits; the denial is worth more.
+
+## Optional live appendix
+
+If services are available, run a real incident after the deterministic segment. Keep the language truthful:
+
+- SDK tool responses in 0.1.3 are opaque content strings and never receive verified badges, even when they contain JSON-looking text. The offline fixture uses the fixed trusted-host envelope; production core supplies typed outcomes.
+- The dispatch gate covers required actions emitted to this client. The TrueForge chat UI and ungated local/Code Mode paths require the upstream coordinator.
+- A failed or cancelled turn is a failed dispatch. The CLI prints `Incident closed` only after explicit terminal `done`.
+- If evidence is missing or stale, show that state rather than claiming green.

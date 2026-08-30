@@ -11,6 +11,7 @@
  * has against what this repository declares, and refuses to call that green.
  */
 import type { TrueForge, TrueForgeApi } from '@truefoundry/trueforge-sdk';
+import { pathToFileURL } from 'node:url';
 import { loadConfig, type Config } from '../config.ts';
 import { createClient } from '../client.ts';
 import { AGENT_NAME, GITHUB_WRITE_TOOLS } from '../agent/spec.ts';
@@ -18,20 +19,27 @@ import { compilePerimeter, judgePath } from '../runtime/perimeter.ts';
 import { banner, style } from '../runtime/render.ts';
 import { exitWhenFlushed } from './exit.ts';
 
+/** Run the pre-flight only when executed as a script, not when imported by tests. */
+const isMain = (() => {
+  try {
+    return import.meta.url === pathToFileURL(process.argv[1] ?? '').href;
+  } catch {
+    return false;
+  }
+})();
+
 /**
- * Files that decide what the agent may do. If the write perimeter admits any of
- * them, the agent can propose a pull request that removes its own restraints -
- * and a 3am approval prompt for "one small config change" is exactly how that
- * gets merged.
+ * Paths, inside the TARGET repository, that the agent must not own even though
+ * a broad `src/**` grant would hand them over: the CI that verifies its own
+ * patch, and the dependency manifests. Harness isolation is enforced earlier -
+ * `loadConfig` refuses a target that IS the harness - so this check assesses the
+ * configured target on its own terms instead of unconditionally treating this
+ * repository's `src/**` as reachable.
  */
-const CONTROL_PLANE = [
-  'src/agent/spec.ts',
-  'src/runtime/approvals.ts',
-  'src/runtime/perimeter.ts',
-  'src/runtime/secrets.ts',
-  'src/config.ts',
-  'package.json',
+const TARGET_SENSITIVE_PATHS = [
   '.github/workflows/ci.yml',
+  'package.json',
+  'package-lock.json',
 ];
 
 interface Check {
@@ -87,6 +95,10 @@ async function main(): Promise<void> {
       label: 'Write perimeter holds',
       run: async () => checkPerimeterConfig(config),
     },
+    {
+      label: 'Connectors authorized',
+      run: () => checkConnectorAuth(client, config),
+    },
   ];
 
   let failed = 0;
@@ -135,6 +147,16 @@ async function checkGateDrift(client: TrueForge, config: Config): Promise<string
     throw new Error(`the saved agent has no "${config.connectors.github}" connector attached`);
   }
 
+  // The runtime gate binds GitHub policy to the connector's stable server id,
+  // which the agent manifest does not carry. A stale LTP_CONNECTOR_GITHUB_ID
+  // means every write is denied as untrusted_tool_origin with the gate otherwise
+  // green, so the check at least names the symptom instead of staying silent.
+  console.log(
+    `  ${style.yellow('NOTE')} LTP_CONNECTOR_GITHUB_ID (${config.connectors.githubId}) is verified at ` +
+      `dispatch: if every GitHub write is denied as untrusted_tool_origin, re-run a turn and ` +
+      `copy the fresh toolInfo serverId from the stream.`,
+  );
+
   const gate = github.requireApprovalForTools ?? [];
   const sentry = servers.find((server) => server.name === config.connectors.sentry);
   const sentryReadOnly = (sentry?.enableTools ?? []).includes('@read-only');
@@ -173,10 +195,11 @@ async function checkGateDrift(client: TrueForge, config: Config): Promise<string
 
 /**
  * Is the declared perimeter one that actually restrains the agent? An empty one
- * is a choice; one that grants nothing, or that admits the files defining the
- * gate, is a mistake worth catching before an incident rather than during one.
+ * is a choice; one that grants nothing, or that hands the agent the CI that
+ * verifies its own patch or the dependency manifests of the service it repairs,
+ * is a mistake worth catching before an incident rather than during one.
  */
-function checkPerimeterConfig(config: Config): string {
+export function checkPerimeterConfig(config: Config): string {
   if (config.writePaths.length === 0) {
     throw new Advisory('no perimeter declared (LTP_WRITE_PATHS empty) - only the human gate applies');
   }
@@ -188,26 +211,122 @@ function checkPerimeterConfig(config: Config): string {
     );
   }
 
-  const admitted = CONTROL_PLANE.filter((path) => judgePath(path, rules).status === 'inside');
+  const admitted = TARGET_SENSITIVE_PATHS.filter(
+    (path) => judgePath(path, rules).status === 'inside',
+  );
   if (admitted.length > 0) {
     throw new Error(
-      `the perimeter admits the agent's own control plane (${admitted.join(', ')}) - it could patch its own gate`,
+      `the perimeter hands the agent ${admitted.join(', ')} inside ${config.targetRepo} - ` +
+        `it could rewrite the CI that verifies its own patch or the dependency manifests`,
     );
   }
 
-  return `${rules.allow.length} grant(s), ${rules.deny.length} exclusion(s); control plane out of reach`;
+  return `${rules.allow.length} grant(s), ${rules.deny.length} exclusion(s); CI and manifests out of reach in ${config.targetRepo}`;
+}
+
+/**
+ * A connector entry in the agent manifest proves the connector is *attached*,
+ * not that it is *authorized*. The worst time to learn the GitHub header token
+ * has expired is when dispatch dies with `mcp.auth_required` on camera, so this
+ * asks the server's settings projection - which carries a nested `auth_status`
+ * per server - for the real state of both configured connectors, and then does
+ * one live `tools/list` round-trip through the GitHub connector, which is what
+ * actually exercises the stored credential.
+ *
+ * The runtime gate additionally binds policy to the connector's *stable server
+ * id* (LTP_CONNECTOR_GITHUB_ID). The settings projection exposes names and auth
+ * state but not that id, so doctor cannot prove the configured value is current
+ * from here - it says so, with the symptom a stale id produces, rather than
+ * print a green line over an unverified identity.
+ */
+async function checkConnectorAuth(client: TrueForge, config: Config): Promise<string> {
+  let servers: TrueForgeApi.ConfiguredMcpServer[];
+  try {
+    ({ data: servers } = await client.settings.mcpServers.list());
+  } catch (error) {
+    // The settings projection is admin-scoped; a non-admin operator cannot
+    // verify connector auth from here. Say so rather than print "All clear"
+    // over an unverified claim - but a check we cannot run is a warning, not a
+    // failure, when the server itself refused it.
+    const status = (error as { status?: number }).status;
+    if (status === 401 || status === 403) {
+      throw new Advisory(
+        `cannot verify connector authorization (${status} from the settings projection) - ` +
+          `confirm both connectors show as connected in Settings → Connectors before recording`,
+      );
+    }
+    throw error;
+  }
+
+  const verdict = connectorAuthVerdict(servers, [
+    config.connectors.github,
+    config.connectors.sentry,
+  ]);
+
+  // A live tools/list through the GitHub connector: the settings projection
+  // says what the server *believes* about the credential; this uses it. A
+  // revoked or wrong header token fails here, before an incident depends on it.
+  const { data: githubTools } = await client.mcpServers.listTools(config.connectors.github);
+  if (!Array.isArray(githubTools) || githubTools.length === 0) {
+    throw new Error(
+      `the "${config.connectors.github}" connector returned no tools from a live tools/list - ` +
+        `its credential may be invalid even though the settings projection reports it authorized`,
+    );
+  }
+
+  return `${verdict}; ${githubTools.length} GitHub tools live`;
+}
+
+/**
+ * The verdict on its own, so the logic is testable without a server: both
+ * connectors must exist and none may still be awaiting authorization.
+ */
+export function connectorAuthVerdict(
+  servers: TrueForgeApi.ConfiguredMcpServer[],
+  expected: string[],
+): string {
+  const missing = expected.filter(
+    (name) => !servers.some((server) => server.name === name),
+  );
+  if (missing.length > 0) {
+    throw new Error(
+      `no connector named ${missing.join(' or ')} on the server - add it in Settings → Connectors`,
+    );
+  }
+
+  const unauthorized = servers.filter(
+    (server) =>
+      expected.includes(server.name) && server.authStatus.status === 'auth_required',
+  );
+  if (unauthorized.length > 0) {
+    const first = unauthorized[0];
+    throw new Error(
+      `connector ${unauthorized.map((server) => server.name).join(' and ')} requires authorization` +
+        (first?.authStatus.authorizationUrl ? ` (${first.authStatus.authorizationUrl})` : '') +
+        ` - reconnect it in Settings → Connectors before dispatch, or the run will fail with mcp.auth_required`,
+    );
+  }
+
+  return expected
+    .map((name) => {
+      const server = servers.find((candidate) => candidate.name === name);
+      return `${name}=${server?.authStatus.status}`;
+    })
+    .join(', ');
 }
 
 function describe(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-main()
-  .catch((error: unknown) => {
-    console.error(`\n${style.red('Doctor crashed:')} ${describe(error)}\n`);
-    process.exitCode = 1;
-  })
-  // A pre-flight against a server that is down leaves a dead connection and an
-  // SDK timer on the loop; without this the command sits there long after it
-  // has told you what is wrong.
-  .finally(exitWhenFlushed);
+if (isMain) {
+  main()
+    .catch((error: unknown) => {
+      console.error(`\n${style.red('Doctor crashed:')} ${describe(error)}\n`);
+      process.exitCode = 1;
+    })
+    // A pre-flight against a server that is down leaves a dead connection and an
+    // SDK timer on the loop; without this the command sits there long after it
+    // has told you what is wrong.
+    .finally(exitWhenFlushed);
+}

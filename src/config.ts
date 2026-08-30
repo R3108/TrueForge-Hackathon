@@ -21,6 +21,20 @@ export interface Config {
    * declared, and only the human gate applies.
    */
   writePaths: string[];
+  /** Version bound into every approval fingerprint. */
+  policyVersion: string;
+  /** Structured test commands recognized by the evidence ledger. */
+  targetedTestCommand: string | undefined;
+  fullSuiteCommand: string | undefined;
+  requireTestEvidence: boolean;
+  /** Exact host-owned producer allowed to emit structured execution facts. */
+  trustedExecutionTool:
+    | {
+        toolSetId: string;
+        toolSetName: string;
+        toolType: 'truefoundry-system';
+      }
+    | undefined;
   /** What to do when a payload bound for the repository carries a credential. */
   secretPolicy: SecretPolicy;
   /** Where decision journals are written. `--no-journal` skips writing one. */
@@ -28,6 +42,8 @@ export interface Config {
   connectors: {
     sentry: string;
     github: string;
+    /** Stable SDK MCP server id paired with the configured GitHub name. */
+    githubId: string;
   };
 }
 
@@ -69,6 +85,27 @@ export function loadConfig(): Config {
     );
   }
 
+  const requireTestEvidence = env('LTP_REQUIRE_TEST_EVIDENCE', 'true').toLowerCase() !== 'false';
+  const targetedTestCommand = process.env.LTP_TARGETED_TEST_COMMAND?.trim() || undefined;
+  const fullSuiteCommand = process.env.LTP_FULL_SUITE_COMMAND?.trim() || undefined;
+  const executionToolId = process.env.LTP_EXECUTION_TOOL_ID?.trim();
+  const executionToolName = process.env.LTP_EXECUTION_TOOL_NAME?.trim();
+  if ((executionToolId && !executionToolName) || (!executionToolId && executionToolName)) {
+    throw new Error(
+      'LTP_EXECUTION_TOOL_ID and LTP_EXECUTION_TOOL_NAME must be configured together.',
+    );
+  }
+  if (requireTestEvidence && (!targetedTestCommand || !fullSuiteCommand)) {
+    throw new Error(
+      'Trusted test evidence requires LTP_TARGETED_TEST_COMMAND and LTP_FULL_SUITE_COMMAND.',
+    );
+  }
+  if (requireTestEvidence && (!executionToolId || !executionToolName)) {
+    throw new Error(
+      'Trusted test evidence requires LTP_EXECUTION_TOOL_ID and LTP_EXECUTION_TOOL_NAME.',
+    );
+  }
+
   return {
     baseUrl: env('TRUEFORGE_BASE_URL', 'http://localhost:8790'),
     token: process.env.TRUEFORGE_TOKEN?.trim() || undefined,
@@ -79,11 +116,24 @@ export function loadConfig(): Config {
       .split(',')
       .map((pattern) => pattern.trim())
       .filter(Boolean),
+    policyVersion: env('LTP_POLICY_VERSION', 'ltp-firewall-v1'),
+    targetedTestCommand,
+    fullSuiteCommand,
+    requireTestEvidence,
+    trustedExecutionTool:
+      executionToolId && executionToolName
+        ? {
+            toolSetId: executionToolId,
+            toolSetName: executionToolName,
+            toolType: 'truefoundry-system',
+          }
+        : undefined,
     secretPolicy: parseSecretPolicy(process.env.LTP_SECRET_POLICY),
     journalDir: env('LTP_JOURNAL_DIR', 'runs'),
     connectors: {
       sentry: env('LTP_CONNECTOR_SENTRY', 'sentry'),
       github: env('LTP_CONNECTOR_GITHUB', 'github'),
+      githubId: env('LTP_CONNECTOR_GITHUB_ID'),
     },
   };
 }

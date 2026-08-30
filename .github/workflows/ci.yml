@@ -28,46 +28,27 @@ jobs:
         run: npm test
 
       # The perimeter is the one control that protects the other controls, so
-      # it is asserted rather than trusted. If a pull request ever widens
-      # LTP_WRITE_PATHS far enough for the agent to reach its own approval gate,
-      # this step fails before a human reviews the diff - which is the point:
-      # the change that removes the boundary is exactly the change nobody reads
-      # carefully.
-      - name: Perimeter holds against the control plane
+      # it is asserted rather than trusted. These are paths inside the TARGET
+      # repository (R3108/cart-service): the CI that verifies the agent's own
+      # patch, and the dependency manifests. If a pull request ever widens
+      # LTP_WRITE_PATHS far enough to hand those back, this step fails before a
+      # human reviews the diff - which is the point: the change that removes a
+      # boundary is exactly the change nobody reads carefully. The harness
+      # itself is protected one layer earlier: loadConfig refuses a target that
+      # IS the harness, asserted in src/__tests__/config.test.ts.
+      - name: Perimeter holds against the target's sensitive paths
         env:
-          LTP_WRITE_PATHS: fixture/**,!fixture/.github/**
+          LTP_WRITE_PATHS: src/**,!.github/**,!package.json,!package-lock.json
         run: |
           npm run perimeter -- --expect-blocked \
-            src/agent/spec.ts \
-            src/runtime/approvals.ts \
-            src/runtime/perimeter.ts \
-            src/runtime/secrets.ts \
-            package.json \
             .github/workflows/ci.yml \
-            fixture/../src/agent/spec.ts \
-            fixture/.github/workflows/ci.yml
+            package.json \
+            package-lock.json \
+            src/../.github/workflows/ci.yml \
+            src/../package.json
           npm run perimeter -- --expect-allowed \
-            fixture/src/cart.js \
-            fixture/src/cart.test.js
+            src/cart.js \
+            src/cart.test.js
 
-  fixture:
-    name: fixture (the service under repair)
-    runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: fixture
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: npm
-          cache-dependency-path: fixture/package-lock.json
-
-      - run: npm ci
-
-      # The agent's claim is that it turns a red test green without breaking
-      # the rest of the suite. This is what checks that claim on its pull
-      # request, independently of anything the agent says about itself.
-      - run: npm test
+  # The service under repair lives in its own repository (R3108/cart-service);
+  # its suite runs on its own pull requests, not here.

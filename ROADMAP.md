@@ -48,13 +48,14 @@ These four run in parallel. Pick one each.
 
 ### Stream A — Get TrueForge running · *needs B2*
 
-1. `npx @truefoundry/trueforge@latest` → http://localhost:8790
-2. **Settings → Models** — add provider + API key
-3. **Settings → Connectors** — add `sentry` and `github` (GitHub needs a PAT with `repo`)
-4. **Settings → Sandbox** — configure a sandbox provider (Daytona)
-5. `cp .env.example .env`, fill it in
-6. `npm run doctor` → all green
-7. `npm run provision`
+1. `npm run trueforge:install` — install the vendored workspace with pinned pnpm 11.16.0
+2. `npm run trueforge:dev` — UI at http://localhost:3000, API at http://localhost:8790
+3. **Settings → Models** — add provider + API key
+4. **Settings → Connectors** — add `sentry` and `github` (GitHub needs a PAT with `repo`)
+5. **Settings → Sandbox** — configure a sandbox provider (Daytona)
+6. `Copy-Item .env.example .env`, fill it in
+7. `npm run doctor` → all green
+8. `npm run provision`
 
 **Done when:** `npm run doctor` passes all three checks.
 

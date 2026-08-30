@@ -6,3 +6,22 @@ dist/
 .DS_Store
 .trueforge/
 runs/
+
+.kiro/
+.commandcode/
+
+
+# Vendored TrueForge: commit source, never local dependencies/output/secrets.
+trueforge/node_modules/
+trueforge/**/node_modules/
+trueforge/**/dist/
+trueforge/**/build/
+trueforge/**/coverage/
+trueforge/**/.cache/
+trueforge/**/.turbo/
+trueforge/packages/trueforge/.env
+trueforge/packages/trueforge/.env.local
+trueforge/packages/trueforge/.env.*.local
+
+trueforge/.prettiercache
+trueforge/**/.prettiercache

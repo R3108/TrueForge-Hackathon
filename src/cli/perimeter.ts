@@ -2,13 +2,13 @@
  * Ask the perimeter what it would do, without running the agent.
  *
  *   npm run perimeter                                  # show the compiled rules
- *   npm run perimeter -- fixture/src/cart.js src/agent/spec.ts
- *   npm run perimeter -- --expect-blocked src/agent/spec.ts
+ *   npm run perimeter -- src/cart.js .github/workflows/ci.yml
+ *   npm run perimeter -- --expect-blocked .github/workflows/ci.yml
  *
  * A boundary you can only observe by dispatching a live incident is a boundary
  * nobody checks. The `--expect-*` forms turn it into an assertion, which is how
- * CI proves on every pull request that the agent still cannot rewrite its own
- * approval gate - see `.github/workflows/ci.yml`.
+ * CI proves on every pull request that the agent still cannot rewrite the CI
+ * that verifies its own patch - see `.github/workflows/ci.yml`.
  *
  * This reads only `LTP_WRITE_PATHS`, so it needs no server, no model and no
  * connectors.
@@ -61,7 +61,7 @@ function main(): void {
 
   if (paths.length === 0) {
     console.log(
-      `\n${style.dim('  Pass paths to judge them: npm run perimeter -- fixture/src/cart.js\n')}`,
+      `\n${style.dim('  Pass paths to judge them: npm run perimeter -- src/cart.js\n')}`,
     );
     return;
   }

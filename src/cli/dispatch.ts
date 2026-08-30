@@ -54,11 +54,7 @@ async function main(): Promise<void> {
 
   console.log(`  target repo      ${style.bold(config.targetRepo)}`);
   console.log(
-    `  write perimeter  ${
-      config.writePaths.length > 0
-        ? style.green(config.writePaths.join(', '))
-        : style.yellow('none declared - only the human gate applies')
-    }`,
+    `  write perimeter  ${style.green(config.writePaths.join(', '))}`,
   );
   console.log(
     `  secret tripwire  ${
@@ -115,13 +111,22 @@ async function main(): Promise<void> {
   ].join('\n');
 
   const { turns } = await runIncident(client, session.id, brief, {
+    targetRepo: config.targetRepo,
+    baseBranch: config.baseBranch,
     writePaths: config.writePaths,
+    githubConnector: config.connectors.github,
+    githubConnectorId: config.connectors.githubId,
+    policyVersion: config.policyVersion,
+    requireTestEvidence: config.requireTestEvidence,
+    trustedExecutionTool: config.trustedExecutionTool,
+    targetedCommand: config.targetedTestCommand,
+    fullSuiteCommand: config.fullSuiteCommand,
     secretPolicy: config.secretPolicy,
     rehearse,
     journal,
   });
 
-  console.log(`\n${style.green('Incident closed')} ${style.dim(`(${turns} turns)`)}`);
+  console.log(`\n${style.green('Incident closed')} ${style.dim(`(${turns} turns, verified terminal status)`)}`);
   reportDecisions(journal);
   console.log(style.dim(`Full trace: ${config.baseUrl}/sessions/${session.id}\n`));
 }
