@@ -279,11 +279,13 @@ Then configure and run Licence to Patch:
 #      Settings → Connectors  → add "sentry" and "github"
 #      Settings → Sandbox     → configure a sandbox provider
 
-# 5. Configure and provision the saved agent.
-Copy-Item .env.example .env   # fill in model, target repo, connector names
+# 5. Configure and provision the saved agent. Fill in the model, target repo,
+#    and the three stable tool identity values required by .env.example when
+#    LTP_REQUIRE_TEST_EVIDENCE=true; these are IDs, not credentials.
+if (!(Test-Path .env)) { Copy-Item .env.example .env } # fill in model, target repo, connector names
 npm install
-npm run doctor               # pre-flight: node version, server, agent
 npm run provision            # creates the agent from src/agent/spec.ts
+npm run doctor               # pre-flight: node version, server, agent, gate
 
 # 6. Dispatch an incident.
 npm run dispatch -- --rehearse PROJECT-4A2   # first time: refuse every write
@@ -334,16 +336,28 @@ The agent lives in **one reviewable file**. `src/agent/spec.ts` is the entire de
 
 Every substantive change lands through a pull request reviewed by **[Qodo](https://www.qodo.ai/)**. No direct commits to `main`.
 
-[Representative merged PR #13](https://github.com/R3108/TrueForge-Hackathon/pull/13) demonstrates the reviewed firewall and final demo workflow.
+**Representative merged PR: [#7 — Close the Qodo findings on #6 and land the verified tool-call firewall](https://github.com/R3108/TrueForge-Hackathon/pull/7).**
 
-## Hackathon submission
+It is the one worth reading, because Qodo found the bug that mattered most. A single model message can carry several tool calls, each with its own approval pause — and the client resolved every pause to the *first* call in the message. The perimeter checked one file, the credential tripwire scanned that same file, the operator was shown that same file, and the approval was routed to a different write entirely. Three independent controls, all inspecting the wrong object, all agreeing.
 
-The project write-up and the recorded demonstration are available here:
+That PR closes it at the root: calls are keyed by `(threadId, toolCallId)` and fingerprinted by their arguments, approval is bound to that fingerprint, and a pause that cannot be resolved fails closed instead of guessing. The rest of the firewall — origin binding, bounded repair, the circuit breaker, epoch-bound evidence — grew out of asking what else in the gate was true by accident.
 
-- **Field Report blog post:** [We built an agent that fixes production bugs. The hardest part was stopping it.](https://dev.to/sumit_kumardas_4cabf25dc/we-built-an-agent-that-fixes-production-bugs-the-hardest-part-was-stopping-it-2cce)
-- **Demo video:** [Watch the Licence to Patch demonstration on YouTube](https://youtu.be/OB1_swcuIdY)
+Every finding across [#3](https://github.com/R3108/TrueForge-Hackathon/pull/3), [#4](https://github.com/R3108/TrueForge-Hackathon/pull/4), [#5](https://github.com/R3108/TrueForge-Hackathon/pull/5), [#6](https://github.com/R3108/TrueForge-Hackathon/pull/6) and [#7](https://github.com/R3108/TrueForge-Hackathon/pull/7) is closed. The story is written up in [docs/BLOG.md](docs/BLOG.md).
+
+## Demo
+
+**Video:** [Watch the Licence to Patch demonstration on YouTube](https://youtu.be/OB1_swcuIdY)
+
+**Write-up:** [We built an agent that fixes production bugs. The hardest part was stopping it.](https://dev.to/sumit_kumardas_4cabf25dc/we-built-an-agent-that-fixes-production-bugs-the-hardest-part-was-stopping-it-2cce)
 
 For the complete setup, recording script, and submission checklist, see [`docs/RUNBOOK.md`](docs/RUNBOOK.md).
+
+Verify the safety model yourself, with no API key, no network and no accounts:
+
+```bash
+npm install
+npm run demo:firewall
+```
 
 ## Safety and scope
 
