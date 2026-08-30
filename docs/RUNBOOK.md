@@ -21,7 +21,7 @@ The agent can write to `cart-service` and **cannot** write to the harness — di
 ### 1.1 What you need before you start
 
 - **Node 22.14 or newer, plus Corepack.** Check with `node -v` and `corepack --version`. If Node is older, install from [nodejs.org](https://nodejs.org).
-- **An OpenAI API key** (or Anthropic/Gemini). This is the one thing that costs money. A full demo run is cents, not dollars.
+- **An API key for your configured model provider** (for this demo: Z.ai GLM 5.3). This is the one thing that costs money. A full demo run is cents, not dollars.
 - **A fine-grained GitHub personal access token, restricted to `R3108/cart-service` only** → [github.com/settings/personal-access-tokens/new](https://github.com/settings/personal-access-tokens/new). Under "Repository access" choose *Only select repositories* → `R3108/cart-service`; grant *Contents: Read and write* and *Pull requests: Read and write*. Do **not** use a classic PAT with `repo` scope: it can reach every repository you can, including this harness, and the whole safety claim — "the agent cannot reach the gate that governs it" — rests on the token not containing this repository.
 - **A free Sentry account** → [sentry.io](https://sentry.io).
 
@@ -65,37 +65,36 @@ Copy the exact string (e.g. `openai/gpt-5-6-terra`, not `gpt-5.6`). You'll need 
 
 This is what produces the real error the agent reads.
 
-```bash
-git clone https://github.com/R3108/cart-service
-cd cart-service
+Open a separate PowerShell terminal in the **parent folder that contains both repositories**. Keep `cart-service` as a sibling of `TrueForge-Hackathon`, not as a subfolder inside the harness.
+
+```powershell
+if (!(Test-Path .\cart-service)) { git clone https://github.com/R3108/cart-service }
+Set-Location .\cart-service
 npm install
+if (!(Test-Path .env)) { Copy-Item .env.example .env }
 ```
 
 In Sentry: create a project (platform: **Node.js**), copy the **DSN**.
 
-```bash
-cp .env.example .env
-```
+Open `.env` and set `SENTRY_DSN` to the DSN. Set `PORT=4000` so the cart service does not compete with the TrueForge UI, which uses port 3000.
 
-Put the DSN in `.env`, then start the service:
+Then start the service:
 
-```bash
-npm start
+```powershell
+node --env-file=.env --import ./instrument.js src/server.js
 ```
 
 In a second terminal, trigger the bug:
 
-```bash
-curl.exe -X POST http://localhost:3000/cart/quote \
-  -H 'Content-Type: application/json' \
-  -d '{"currency":"GBP"}'
+```powershell
+curl.exe -sS -X POST http://localhost:4000/cart/quote -H "Content-Type: application/json" -d '{"currency":"GBP"}'
 ```
 
 That request omits `items`, and `quote()` calls `.reduce` on it. You should get a 500, and **an issue should appear in Sentry within about 30 seconds**.
 
 In Sentry, open the issue and copy its **short ID** — it looks like `CART-SERVICE-2`. Write it down; it's what you pass to the agent.
 
-> If nothing arrives in Sentry, the DSN is wrong or `instrument.js` isn't loading. `npm start` must run through `--import ./instrument.js` (it does by default).
+> If nothing arrives in Sentry, the DSN is wrong or the service was not started with both `--env-file=.env` and `--import ./instrument.js` as shown above.
 
 ### 1.5 Configure the harness
 
@@ -106,10 +105,10 @@ npm install
 if (!(Test-Path .env)) { Copy-Item .env.example .env }
 ```
 
-Edit `.env`. The target and connector names already have the right defaults. Set the model and replace the three `replace-with-...` identity placeholders:
+Edit `.env`. The target and connector names already have the right defaults. For Z.ai GLM 5.3, use `zai/glm-5-3` if that is the exact value returned by the models endpoint. Then replace the three `replace-with-...` identity placeholders:
 
 ```
-LTP_MODEL=openai/gpt-5-6-terra        # the exact string from step 1.3
+LTP_MODEL=zai/glm-5-3                 # or the exact string returned by step 1.3
 LTP_TARGET_REPO=R3108/cart-service    # already correct
 LTP_EXECUTION_TOOL_ID=...             # TrueForge host sandbox toolInfo.serverId
 LTP_EXECUTION_TOOL_NAME=...           # TrueForge host sandbox toolInfo.serverName
