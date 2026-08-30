@@ -43,7 +43,7 @@ When you run TrueForge ([Quickstart](/quickstart)), open the app URL (for exampl
 
 ## Adaptive controls and current-information search
 
-The composer exposes a **/ Controls** palette for both draft agents and saved (immutable) agents. You can also type commands directly at the start of a message. Recognized control lines are removed from model-visible user text, validated by the server, stored in the root thread's durable capability state, and projected back into the system instruction as user-provided preferences. The original turn input remains available in the public turn record.
+Control lines are typed directly at the start of a message (there is no composer palette). Recognized control lines are removed from model-visible user text, validated by the server, stored in the root thread's durable capability state, and projected back into the system instruction as user-provided preferences. The original turn input remains available in the public turn record.
 
 | Command | Effect |
 | --- | --- |
@@ -58,7 +58,7 @@ The composer exposes a **/ Controls** palette for both draft agents and saved (i
 
 Only recognized leading command lines are controls; ordinary text and file attachments are preserved. Invalid, oversized, unknown-model, and unsupported-effort requests fail before the turn is committed. Controls persist across later turns and forks. They never override system instructions, tool policy, approvals, authentication, sandbox limits, or host safety policy.
 
-When the server has executable web search configured, the composer shows **Web search: available** beside **Tools**, and the agent receives the `web_search` tool. Configure Brave Search only on the server:
+When the server has executable web search configured, the agent receives the `web_search` tool. Configure Brave Search only on the server:
 
 ```bash
 WEB_SEARCH_PROVIDER=brave

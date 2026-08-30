@@ -1,6 +1,8 @@
 # TrueForge Adaptive Kernel patch
 
-The complete patched TrueForge monorepo is vendored at [`trueforge/`](../trueforge), so this repository is self-contained and does not require a sibling checkout or a published `npx` package. `trueforge-adaptive-kernel.patch` is retained as a portable recovery and provenance artifact: it reproduces the vendored kernel changes against the exact upstream base, including new files, generated OpenAPI updates, tests, benchmark fixtures, and changesets.
+The complete patched TrueForge monorepo is vendored at [`trueforge/`](../trueforge), so this repository is self-contained and does not require a sibling checkout or a published `npx` package. `trueforge-adaptive-kernel.patch` is retained as a portable recovery and provenance artifact: it reproduces the kernel changes **as originally submitted** against the exact upstream base, including new files, generated OpenAPI updates, tests, benchmark fixtures, and changesets.
+
+Note: the vendored tree has since removed the composer `/ Controls` palette and the web-search status indicator (they were redundant UI over server-side controls that work by typing control lines directly). Applying the patch therefore yields the original composer UI, not the current one; kernel changes are unaffected.
 
 The refreshed patch also includes:
 
