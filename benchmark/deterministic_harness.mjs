@@ -917,9 +917,12 @@ register(function falseCompletionBlocking() {
 });
 
 /*
- * Fixture 14 — stale evidence invalidation. Evidence that was valid under an
- * earlier workspace epoch (historical regression) or produced under a prior
- * policy version no longer satisfies completion; the verifiers report `stale`.
+ * Fixture 14 — stale evidence invalidation. A historical (pre-fix) regression
+ * record is the successful flow and must NOT block: the red run necessarily
+ * precedes the fix write that invalidates it. What must still block is green
+ * evidence invalidated by a later content mutation (targeted/suite no longer
+ * current), and evidence produced under a prior policy version; those report
+ * `stale` or `missing` and fail completion.
  */
 register(function staleEvidence() {
   const contract = compileTaskContract('Fix the null deref crash in cart', COMPILER_OPTIONS, 'stale-1');
@@ -935,25 +938,32 @@ register(function staleEvidence() {
     ...over,
   });
 
-  const historical = verifyCompletion(baseInput({ evidence: evidenceSummary({ regressionIsHistorical: true }) }));
+  const preFixRed = verifyCompletion(baseInput({ evidence: evidenceSummary({ regressionIsHistorical: true }) }));
+  const greenInvalidated = verifyCompletion(
+    baseInput({ evidence: evidenceSummary({ regressionIsHistorical: true, targetedTestPassed: false, fullSuitePassed: false }) }),
+  );
   const policyAdvanced = verifyCompletion(baseInput({ activePolicyVersion: 'harness-v2' }));
 
   const pass =
-    historical.satisfied === false &&
-    historical.results.some((r) => r.status === 'stale') &&
+    preFixRed.satisfied === true &&
+    greenInvalidated.satisfied === false &&
+    greenInvalidated.results.some((r) => r.verifierId === 'required-evidence' && r.status !== 'passed') &&
     policyAdvanced.satisfied === false &&
     policyAdvanced.results.some((r) => r.verifierId === 'current-policy-version' && r.status === 'stale');
 
   return {
     id: 'stale_evidence',
-    title: 'stale evidence (historical epoch / advanced policy) fails completion',
+    title: 'pre-fix red is valid; invalidated green or advanced policy fails completion',
     gate: true,
     pass,
-    detail: `historical stale=${historical.results.some((r) => r.status === 'stale')}; policy stale=${policyAdvanced.results.some((r) => r.verifierId === 'current-policy-version' && r.status === 'stale')}`,
+    detail: `pre-fix red satisfied=${preFixRed.satisfied}; green invalidated satisfied=${greenInvalidated.satisfied}; policy stale=${policyAdvanced.results.some((r) => r.verifierId === 'current-policy-version' && r.status === 'stale')}`,
     measures: {
-      historical_regression: {
-        satisfied: historical.satisfied,
-        any_stale: historical.results.some((r) => r.status === 'stale'),
+      pre_fix_red_regression: {
+        satisfied: preFixRed.satisfied,
+      },
+      green_invalidated: {
+        satisfied: greenInvalidated.satisfied,
+        blocking: greenInvalidated.results.some((r) => r.verifierId === 'required-evidence' && r.status !== 'passed'),
       },
       policy_advanced: {
         satisfied: policyAdvanced.satisfied,

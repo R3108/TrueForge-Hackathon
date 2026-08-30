@@ -147,7 +147,7 @@ It enforces these invariants:
 5. Approval is keyed by session, turn, thread, call ID, HMAC argument fingerprint, and policy version. Changed semantics or a new call ID require another decision.
 6. Duplicate required actions replay the recorded decision without another prompt or gate attempt. Human denial terminates that repair chain.
 7. Test evidence requires an exactly configured, non-composed command, exact response correlation, an exact configured host producer identity, and a fixed top-level execution-facts envelope with completion, timeout, status, and exit code. Opaque SDK strings—including JSON-looking strings—and same-named untrusted producers remain unverified.
-8. Workspace/repository mutations increment `workspaceEpoch` and invalidate older current-state evidence.
+ 8. Content mutations (file writes, merges) increment `workspaceEpoch` and invalidate older current-state evidence. A pre-fix regression record is exempt by design - the red run necessarily precedes the fix write - as are publication tools (`create_pull_request` and issue/PR metadata), which change no code the tests executed against.
 9. Only explicit `done` closes an incident. `error`, `cancelled`, unknown, and nonterminal no-action states fail closed.
 10. Core TrueForge policy can only be tightened here; an application allow can never bypass a server-required approval.
 

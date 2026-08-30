@@ -475,30 +475,29 @@ function projectEvidenceIntoKernel(
 ): void {
   if (contract.bypassed) return;
 
-  kernel.recordState({
-    type: 'evidence_recorded',
-    kind: 'regression_failure',
-    atEpoch: evidence.workspaceEpoch,
-  });
-  if (evidence.regressionObserved && !evidence.regressionIsHistorical) {
+  if (evidence.regressionObserved) {
+    kernel.recordState({
+      type: 'evidence_recorded',
+      kind: 'regression_failure',
+      atEpoch: evidence.workspaceEpoch,
+    });
+    // The red run precedes the fix by definition; a historical regression
+    // record is the successful flow, not a reason to withhold the criterion.
     kernel.recordState({
       type: 'criterion_satisfied',
       text: 'The reported failure is reproduced by a failing test.',
     });
   }
   if (evidence.targetedTestPassed && evidence.fullSuitePassed) {
-    kernel.recordState({
-      type: 'criterion_satisfied',
-      text: 'The fix turns the failing test green without breaking the suite.',
-    });
-    kernel.recordState({
-      type: 'criterion_satisfied',
-      text: 'The new behavior is covered by a passing test.',
-    });
-    kernel.recordState({
-      type: 'criterion_satisfied',
-      text: 'Existing tests still pass after the refactor.',
-    });
+    const satisfied: Record<string, string> = {
+      bug_fix: 'The fix turns the failing test green without breaking the suite.',
+      feature: 'The new behavior is covered by a passing test.',
+      refactor: 'Existing tests still pass after the refactor.',
+    };
+    const text = satisfied[contract.taskType];
+    if (text) {
+      kernel.recordState({ type: 'criterion_satisfied', text });
+    }
   }
   // User-stated criteria are not implied by the generic evidence kinds; they
   // clear only when the evidence ledger explicitly vouches for them, which

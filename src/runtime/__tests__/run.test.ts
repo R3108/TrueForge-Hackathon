@@ -1,4 +1,4 @@
-import { describe, test } from 'node:test';
+﻿import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 import type { TrueForge } from '@truefoundry/trueforge-sdk';
 import { runIncident, type IncidentPolicy } from '../run.ts';
@@ -266,5 +266,115 @@ describe('informational kernel display is additive and separate from required ac
     assert.equal(result.evidence.targetedTestPassed, true);
     assert.equal(result.evidence.fullSuitePassed, true);
     assert.doesNotMatch(result.finalOutput, /INCOMPLETE/, 'green evidence must complete the task');
+  });
+
+  test('the flagship flow - red test, fix write, green tests, opened PR - completes', async () => {
+    // The real repair sequence, with every epoch bump: the fix write and the
+    // PR creation are both remote mutations, so the red record necessarily
+    // ends historical and the green records are only current until the PR
+    // response arrives. Treating the historical red as stale blocked every
+    // genuine repair; this test pins the whole flow to completion.
+    const targeted = 'npm test -- --test-name-pattern cart';
+    const fullSuite = 'npm test';
+    const githubWrite = (callId: string, eventId: string, toolName: string, args: unknown) => [
+      {
+        type: 'model.message',
+        id: eventId,
+        threadId: 'main',
+        toolCalls: [
+          {
+            id: callId,
+            function: { name: toolName, arguments: JSON.stringify(args) },
+            toolInfo: { type: 'mcp', serverId: 'github-id', serverName: 'github' },
+          },
+        ],
+      },
+      {
+        type: 'tool.response',
+        id: `response_${callId}`,
+        threadId: 'main',
+        toolCallId: callId,
+        content: 'done',
+      },
+    ];
+    const execEvent = (callId: string, eventId: string, command: string, exitCode: number) => [
+      {
+        type: 'model.message',
+        id: eventId,
+        threadId: 'main',
+        toolCalls: [
+          {
+            id: callId,
+            function: { name: 'sandbox_exec', arguments: JSON.stringify({ command }) },
+            toolInfo: { type: 'truefoundry-system', serverId: 'trusted-host-id', serverName: 'trusted-host' },
+          },
+        ],
+      },
+      {
+        type: 'tool.response',
+        id: `response_${callId}`,
+        threadId: 'main',
+        toolCallId: callId,
+        executionFacts: { version: 1, status: exitCode === 0 ? 'succeeded' : 'failed', exitCode, timedOut: false },
+        content: 'tests passed',
+      },
+    ];
+
+    const client = fakeClient([
+      { type: 'turn.created', id: 'created', turnId: 'turn_1' },
+      // 1. Red test at epoch 0.
+      ...execEvent('exec_red', 'event_red', targeted, 1),
+      // 2. The fix write - a remote mutation, epoch 1, red record invalidated.
+      ...githubWrite('write_fix', 'event_fix', 'create_or_update_file', {
+        owner: 'truefoundry',
+        repo: 'example',
+        branch: 'fix/cart',
+        path: 'src/cart.js',
+        content: '// the fix',
+      }),
+      // 3. Green targeted + suite at epoch 1.
+      ...execEvent('exec_targeted', 'event_targeted', targeted, 0),
+      ...execEvent('exec_suite', 'event_suite', fullSuite, 0),
+      // 4. The PR - another remote mutation, epoch 2, green records now
+      //    historical as well. Completion must still hold.
+      ...githubWrite('open_pr', 'event_pr', 'create_pull_request', {
+        owner: 'truefoundry',
+        repo: 'example',
+        title: 'Fix null deref',
+        head: 'fix/cart',
+        base: 'main',
+      }),
+      {
+        type: 'turn.done',
+        id: 'done',
+        state: {
+          status: 'done',
+          output: { content: 'Fixed and the pull request is open.' },
+          requiredActions: [],
+        },
+      },
+    ]);
+
+    const result = await runIncident(
+      client,
+      'session_1',
+      'Production incident: fix the null deref in cart.js',
+      {
+        ...policy,
+        requireTestEvidence: true,
+        targetedCommand: targeted,
+        fullSuiteCommand: fullSuite,
+        trustedExecutionTool: {
+          toolSetId: 'trusted-host-id',
+          toolSetName: 'trusted-host',
+          toolType: 'truefoundry-system',
+        },
+        kernel: { enabled: true, modelLimits: { contextWindow: 100_000, maxOutputTokens: 20_000 } },
+      },
+    );
+
+    assert.equal(result.evidence.regressionObserved, true);
+    assert.equal(result.evidence.regressionIsHistorical, true, 'the fix write preceded the PR');
+    assert.doesNotMatch(result.finalOutput, /INCOMPLETE/, 'the flagship flow must complete');
   });
 });

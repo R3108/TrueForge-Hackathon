@@ -85,7 +85,7 @@ The repository perimeter is now one rule in a typed gate, not the whole control.
 - binds GitHub policy to the configured MCP server name and stable server ID, then checks exact repository, repository-relative paths, allowlisted paths, secret paths, protected branches, destructive tools, and known required fields;
 - returns bounded structured repair feedback without mutating or replaying the original call;
 - binds one-shot approval to session, turn, thread, call ID, HMAC argument fingerprint, and policy version;
-- invalidates test evidence whenever the observed workspace/repository epoch advances; and
+- invalidates green test evidence whenever a content mutation (file write or merge) advances the workspace epoch - while treating the pre-fix red run, and the final PR-publication step, as the flow they are; and
 - closes only on explicit terminal `done`, never on failed or cancelled turns.
 
 And the boundary starts one layer earlier than the gate itself. `LTP_TARGET_REPO` is **repo-granular**: once the agent may write to a repository, the harness will let it write anywhere in that repository. So the service it repairs — [**R3108/cart-service**](https://github.com/R3108/cart-service) — is a *different repository from this one*. The agent's GitHub scope simply does not contain its own approval gate, which makes "it cannot disarm itself" a fact about credentials rather than a promise about glob matching. Pointing `LTP_TARGET_REPO` at this harness is refused at startup, and CI asserts that the refusal still works. Inside the target, the perimeter is the second layer: the agent owns the service's source, but not the CI that verifies its patch.

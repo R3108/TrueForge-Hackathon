@@ -62,12 +62,24 @@ describe('VerificationCoordinator — action task completion', () => {
     assert.ok(decision.blockingReasons.length > 0);
   });
 
-  test('treats stale (later-mutated) evidence as not satisfying completion', () => {
+  test('a historical (pre-fix) regression record still satisfies reproduction - the red run precedes the fix', () => {
+    // The flagship flow is: red test -> fix write (epoch bump, red record
+    // invalidated) -> green tests. Marking the reproduction stale because the
+    // fix write followed it would block every genuine repair.
     const decision = verifyCompletion(
       input(bugFix, { evidence: evidence({ regressionIsHistorical: true }) }),
     );
+    assert.equal(decision.satisfied, true);
+  });
+
+  test('a later mutation that invalidates the green tests still blocks completion', () => {
+    const decision = verifyCompletion(
+      input(bugFix, {
+        evidence: evidence({ regressionIsHistorical: true, targetedTestPassed: false, fullSuitePassed: false }),
+      }),
+    );
     assert.equal(decision.satisfied, false);
-    assert.ok(decision.results.some((r) => r.status === 'stale'));
+    assert.match(decision.output, /INCOMPLETE/);
   });
 
   test('blocks completion while a required action is still pending', () => {

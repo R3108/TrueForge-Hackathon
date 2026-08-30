@@ -42,17 +42,26 @@ export interface TrustedExecutionEnvelope {
   };
 }
 
-const REMOTE_MUTATIONS = new Set([
-  'create_branch',
+/**
+ * Repository writes that change the CONTENT under test. A mutation invalidates
+ * earlier current-state evidence: tests that ran against the previous code
+ * state can no longer vouch for it.
+ *
+ * Deliberately absent: branch creation and the publication/metadata tools
+ * (`create_pull_request`, `update_pull_request`, `merge_pull_request`,
+ * `create_issue`, `update_issue`, `add_issue_comment`). None of them changes
+ * the code the tests executed against - the flagship flow is red test, fix
+ * write, green tests, then OPEN THE PR, and counting that final publication as
+ * a mutation would invalidate the green records of the very state being
+ * published. `merge_pull_request` is included because a merge can change the
+ * base the tests may have run against when the head was checked out from it;
+ * when in doubt, invalidate.
+ */
+const CONTENT_MUTATIONS = new Set([
   'create_or_update_file',
   'push_files',
   'delete_file',
-  'create_pull_request',
-  'update_pull_request',
   'merge_pull_request',
-  'create_issue',
-  'update_issue',
-  'add_issue_comment',
 ]);
 
 function normalizeCommand(command: string): string {
@@ -83,7 +92,7 @@ function isSafeExactCommand(actual: string, expected: string | undefined): boole
 }
 
 function isMutation(invocation: ToolInvocation, configuredTestCommand: boolean): boolean {
-  if (REMOTE_MUTATIONS.has(invocation.toolName)) return true;
+  if (CONTENT_MUTATIONS.has(invocation.toolName)) return true;
   if (commandOf(invocation)) return !configuredTestCommand;
   return /(?:write|edit|patch|delete|remove|create|move|rename|replace).*(?:file|workspace)|(?:file|workspace).*(?:write|edit|delete|create)/i.test(
     invocation.toolName,

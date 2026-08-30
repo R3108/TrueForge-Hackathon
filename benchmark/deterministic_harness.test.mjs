@@ -188,10 +188,11 @@ describe('deterministic harness — kernel-backed invariants', () => {
     assert.equal(m.genuine.satisfied, true);
   });
 
-  test('stale evidence (historical epoch / advanced policy) fails completion', () => {
+  test('pre-fix red is valid; invalidated green or advanced policy fails completion', () => {
     const m = byId.get('stale_evidence').measures;
-    assert.equal(m.historical_regression.satisfied, false);
-    assert.equal(m.historical_regression.any_stale, true);
+    assert.equal(m.pre_fix_red_regression.satisfied, true, 'red run precedes the fix by definition');
+    assert.equal(m.green_invalidated.satisfied, false, 'a later mutation must invalidate green evidence');
+    assert.equal(m.green_invalidated.blocking, true);
     assert.equal(m.policy_advanced.satisfied, false);
     assert.equal(m.policy_advanced.policy_verifier_stale, true);
   });

@@ -7,9 +7,12 @@
  * a contract and evaluate typed inputs.
  *
  * Model prose is not evidence. When required evidence is missing, errors remain
- * unresolved, unknown writes are outstanding, required actions are pending, or a
- * later workspace mutation invalidated prior evidence, a claimed success is
- * BLOCKED and REWRITTEN into a truthful incomplete/blocked answer.
+ * unresolved, unknown writes are outstanding, required actions are pending, or
+ * the CURRENT-state evidence (green tests) was invalidated by a later workspace
+ * mutation, a claimed success is BLOCKED and REWRITTEN into a truthful
+ * incomplete/blocked answer. The regression reproduction is exempt from
+ * current-epoch freshness by design: a red run necessarily precedes the fix
+ * that invalidates it, so its record is allowed to be historical.
  *
  * Conversational questions are exempt: no verifiers apply, so they stay
  * lightweight.
@@ -134,9 +137,15 @@ const requiredEvidenceVerifier: Verifier = {
     for (const req of input.contract.requiredEvidence) {
       switch (req.kind) {
         case 'regression_reproduction':
+          // The red run is definitionally PRE-fix: reproduce first, then write
+          // the fix, and the fix write bumps the workspace epoch - so a
+          // regression record at an older epoch is the successful flow, not
+          // staleness. Requiring it at the current epoch would mark every real
+          // repair stale. Freshness stays enforced where it means something:
+          // on the green evidence below, at the current epoch.
           criteria.push({
             criterion: req.description,
-            status: e.regressionObserved ? (e.regressionIsHistorical ? 'stale' : 'passed') : 'missing',
+            status: e.regressionObserved ? 'passed' : 'missing',
           });
           break;
         case 'targeted_test_pass':
