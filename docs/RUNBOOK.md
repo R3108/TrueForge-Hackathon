@@ -81,7 +81,7 @@ Open `.env` and set `SENTRY_DSN` to the DSN. Set `PORT=4000` so the cart service
 Then start the service:
 
 ```powershell
-npm start
+node --env-file=.env --import ./instrument.js src/server.js
 ```
 
 In a second terminal, trigger the bug:
@@ -94,7 +94,7 @@ That request omits `items`, and `quote()` calls `.reduce` on it. You should get 
 
 In Sentry, open the issue and copy its **short ID** — it looks like `CART-SERVICE-2`. Write it down; it's what you pass to the agent.
 
-> If nothing arrives in Sentry, the DSN is wrong or `instrument.js` isn't loading. `npm start` must run through `--import ./instrument.js` (it does by default).
+> If nothing arrives in Sentry, the DSN is wrong or the service was not started with both `--env-file=.env` and `--import ./instrument.js` as shown above.
 
 ### 1.5 Configure the harness
 
