@@ -1,4 +1,4 @@
-﻿import { describe, test } from 'node:test';
+import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 import type { TrueForge } from '@truefoundry/trueforge-sdk';
 import { runIncident, type IncidentPolicy } from '../run.ts';
@@ -335,8 +335,9 @@ describe('informational kernel display is additive and separate from required ac
       // 3. Green targeted + suite at epoch 1.
       ...execEvent('exec_targeted', 'event_targeted', targeted, 0),
       ...execEvent('exec_suite', 'event_suite', fullSuite, 0),
-      // 4. The PR - another remote mutation, epoch 2, green records now
-      //    historical as well. Completion must still hold.
+      // 4. The PR. Publication does NOT bump the workspace epoch (it changes
+      //    no code the tests ran against - only content mutations do), so the
+      //    green records stay current. That is exactly why completion holds.
       ...githubWrite('open_pr', 'event_pr', 'create_pull_request', {
         owner: 'truefoundry',
         repo: 'example',
@@ -374,7 +375,8 @@ describe('informational kernel display is additive and separate from required ac
     );
 
     assert.equal(result.evidence.regressionObserved, true);
-    assert.equal(result.evidence.regressionIsHistorical, true, 'the fix write preceded the PR');
+    assert.equal(result.evidence.regressionIsHistorical, true, 'the fix write preceded the green runs');
+    assert.equal(result.evidence.targetedTestPassed, true, 'PR publication does not invalidate green evidence');
     assert.doesNotMatch(result.finalOutput, /INCOMPLETE/, 'the flagship flow must complete');
   });
 });
