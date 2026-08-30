@@ -3,7 +3,6 @@
 import { useSlot } from '../../theme/SlotsProvider.js';
 import type { ComposerLeftSectionProps, ComposerRightSectionProps } from '../ComposerSections.js';
 import { DraftReasoningEffortSelector } from './DraftReasoningEffortSelector.js';
-import { WebSearchStatus } from './WebSearchStatus.js';
 
 export function DraftComposerLeftSection({ disabled, isRunning, onAttach }: ComposerLeftSectionProps) {
   const DraftCompositeSelector = useSlot('DraftCompositeSelector');
@@ -11,7 +10,6 @@ export function DraftComposerLeftSection({ disabled, isRunning, onAttach }: Comp
   return (
     <div className="flex min-w-0 flex-wrap items-center gap-1.5">
       <DraftCompositeSelector disabled={disabled} isRunning={isRunning} onAttach={onAttach} />
-      <WebSearchStatus />
     </div>
   );
 }

@@ -4,7 +4,6 @@ import { ComposerPrimitive, useAui, useAuiState } from '@assistant-ui/react';
 import { useTrueFoundryAgentSpec, useTrueFoundryCancel } from '@truefoundry/assistant-ui-runtime';
 import { useRef } from 'react';
 
-import { AdaptiveControlsComposerInput } from '../atoms/draft/AdaptiveControlsComposerInput.js';
 import { DraftCatalogProvider } from '../atoms/draft/DraftCatalogProvider.js';
 import { useComposerBusyState } from '../hooks/useComposerBusyState.js';
 import { useComposerPauseView } from '../hooks/useComposerPauseView.js';
@@ -71,18 +70,13 @@ function ComposerBody({ placeholder }: { placeholder: string }) {
           <ComposerShell
             attachments={<ComposerAttachmentsContainer />}
             input={
-              <AdaptiveControlsComposerInput
+              <ComposerPrimitive.Input
+                data-slot="aui_composer-input"
+                placeholder={placeholder}
                 disabled={isBusy}
-                input={
-                  <ComposerPrimitive.Input
-                    data-slot="aui_composer-input"
-                    placeholder={placeholder}
-                    disabled={isBusy}
-                    submitMode="enter"
-                    aria-label="Message input"
-                    className="text-text-primary placeholder:text-text-secondary/80 max-h-[10lh] min-h-10 w-full resize-none overflow-y-auto rounded-lg border-none bg-transparent px-1 py-1 text-base leading-normal shadow-none outline-none disabled:cursor-not-allowed"
-                  />
-                }
+                submitMode="enter"
+                aria-label="Message input"
+                className="text-text-primary placeholder:text-text-secondary/80 max-h-[10lh] min-h-10 w-full resize-none overflow-y-auto rounded-lg border-none bg-transparent px-1 py-1 text-base leading-normal shadow-none outline-none disabled:cursor-not-allowed"
               />
             }
             disabled={isBusy}
